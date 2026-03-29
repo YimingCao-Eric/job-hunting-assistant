@@ -1,0 +1,12 @@
+.jha-scanning-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  background: rgba(0, 100, 200, 0.85);
+  color: white;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: sans-serif;
+  border-radius: 0 0 0 8px;
+  z-index: 999999;
+}

@@ -1,0 +1,484 @@
+/* ── Warning banner ──────────────────────────────────────── */
+
+.warningBanner {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #92400e;
+  margin-bottom: 16px;
+}
+
+/* ── Scan panel ───────────────────────────────────────────── */
+
+.scanPanel {
+  background: #f8f8f8;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.scanButtons {
+  display: flex;
+  gap: 10px;
+}
+
+.scanBtnLinkedIn {
+  background: #0077b5;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.scanBtnLinkedIn:disabled {
+  background: #b0c4d8;
+  cursor: not-allowed;
+}
+
+.scanBtnIndeed {
+  background: #2164f3;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.scanBtnIndeed:disabled {
+  background: #b0bef8;
+  cursor: not-allowed;
+}
+
+.scanBtnGlassdoor {
+  background: #0caa41;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.scanBtnGlassdoor:disabled {
+  background: #9dd9b0;
+  cursor: not-allowed;
+}
+
+.stopBtn {
+  background: #dc2626;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 24px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.stopBtn:hover {
+  background: #b91c1c;
+}
+
+.scanStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.scanTimer {
+  font-size: 13px;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  margin-left: 4px;
+}
+
+.pulseDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.lastRun {
+  font-size: 0.8rem;
+  color: #777;
+  width: 100%;
+}
+
+.scanHint {
+  font-size: 0.75rem;
+  color: #999;
+  width: 100%;
+  margin-top: 2px;
+}
+
+/* ── Scan history (collapsible) ───────────────────────────── */
+
+.scanHistory {
+  margin-bottom: 1.25rem;
+}
+
+.scanHistoryToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  cursor: pointer;
+}
+
+.scanHistoryToggle:hover {
+  background: #fafafa;
+}
+
+.scanHistoryChevron {
+  font-size: 10px;
+  color: #666;
+}
+
+.scanHistoryList {
+  margin-top: 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.scanHistoryEmpty {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: #888;
+}
+
+.scanHistoryRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 12px;
+  color: #333;
+  text-decoration: none;
+  transition: background 0.12s;
+}
+
+.scanHistoryRow:last-child {
+  border-bottom: none;
+}
+
+.scanHistoryRow:hover {
+  background: #f8f8f8;
+}
+
+.scanHistorySite {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.scanHistoryMeta {
+  color: #555;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ── Tab bar ──────────────────────────────────────────────── */
+
+.tabBar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.tab {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  background: #f0f0f0;
+  color: #555;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tab:hover {
+  background: #e0e0e0;
+}
+
+.tabActive {
+  background: #111;
+  color: #fff;
+}
+
+.tabActive:hover {
+  background: #333;
+}
+
+/* ── Error ────────────────────────────────────────────────── */
+
+.error {
+  color: #c0392b;
+  background: #fdecea;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+/* ── Spinner ──────────────────────────────────────────────── */
+
+.spinnerWrap {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 0;
+}
+
+/* ── Empty state ──────────────────────────────────────────── */
+
+.empty {
+  text-align: center;
+  margin-top: 60px;
+  color: #999;
+}
+
+.emptyTitle {
+  font-size: 1rem;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.emptyHint {
+  font-size: 0.85rem;
+}
+
+/* ── Counters ─────────────────────────────────────────────── */
+
+.counters {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #666;
+}
+
+.counter strong {
+  color: #111;
+  font-size: 15px;
+}
+
+/* ── Run selector ─────────────────────────────────────────── */
+
+.runSelector {
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: #555;
+}
+
+.runSelector select {
+  padding: 6px 10px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-left: 6px;
+  background: #fff;
+}
+
+/* ── Filtered summary ─────────────────────────────────────── */
+
+.filteredSummary {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+
+.filteredBreakdown {
+  display: block;
+  font-size: 12px;
+  color: #999;
+}
+
+/* ── Grid ─────────────────────────────────────────────────── */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+/* ── Job card ─────────────────────────────────────────────── */
+
+.card {
+  position: relative;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  padding: 16px;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.card:has(.websiteBadge) .cardTitle {
+  padding-right: 88px;
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+.cardTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+
+.cardCompany {
+  font-size: 13px;
+  color: #444;
+  margin-top: 4px;
+}
+
+.cardLocation {
+  font-size: 12px;
+  color: #888;
+  margin-top: 6px;
+}
+
+.cardTime {
+  font-size: 11px;
+  color: #aaa;
+  margin-top: 8px;
+  text-align: right;
+}
+
+/* ── Skip reason badges ───────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-top: 8px;
+  align-self: flex-start;
+}
+
+.badgeStale {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.badgeJdFailed {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badgeNoId {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.badgeDuplicate {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+/* ── Load more ────────────────────────────────────────────── */
+
+.loadMore {
+  display: block;
+  margin: 1.5rem auto 0;
+  padding: 10px 32px;
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.loadMore:hover {
+  background: #f0f0f0;
+}
+
+/* ── Website filter tabs ─────────────────────────────────── */
+
+.filterTabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.filterTab {
+  padding: 6px 14px;
+  border: 1px solid #e5e5e5;
+  border-radius: 20px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.filterTabActive {
+  background: #111;
+  color: white;
+  border-color: #111;
+}
+
+.websiteBadge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  color: white;
+}
+
+.badgeLinkedIn {
+  background: #0077b5;
+}
+
+.badgeIndeed {
+  background: #2164f3;
+}
+
+.badgeGlassdoor {
+  background: #0caa41;
+}

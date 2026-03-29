@@ -1,0 +1,254 @@
+.card {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  max-width: 720px;
+  padding: 2rem;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid #e5e5e5;
+  padding-bottom: 10px;
+}
+
+.tab {
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  background: #fafafa;
+  color: #444;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tab:hover {
+  background: #f0f0f0;
+}
+
+.tabActive {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}
+
+.checkboxGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 0.35rem;
+}
+
+/* ── Spinner ──────────────────────────────────────────────── */
+
+.spinnerWrap {
+  display: flex;
+  justify-content: center;
+  padding: 3rem 0;
+}
+
+/* ── Error ────────────────────────────────────────────────── */
+
+.error {
+  color: #c0392b;
+  background: #fdecea;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+/* ── Form fields ──────────────────────────────────────────── */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+}
+
+.label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #444;
+  margin-bottom: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.input,
+.select {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  background: #fafafa;
+  transition: border-color 0.15s;
+}
+
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: #555;
+  background: #fff;
+}
+
+.hint {
+  color: #888;
+  font-size: 11px;
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.details {
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  background: #fafafa;
+}
+
+.summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  list-style-position: outside;
+}
+
+.detailsBody {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-top: 1rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #e8e8e8;
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.checkboxLabel input {
+  width: auto;
+}
+
+/* ── Save button ──────────────────────────────────────────── */
+
+.saveBtn {
+  margin-top: 0.5rem;
+  width: 100%;
+  padding: 0.65rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  background: #111;
+  color: #fff;
+}
+
+.saveBtn:hover:not(:disabled) {
+  background: #333;
+}
+
+.saveBtn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.saveBtnSaved {
+  background: #27ae60;
+}
+
+.saveBtnSaved:hover:not(:disabled) {
+  background: #27ae60;
+}
+
+/* ── URL preview (after Save) ─────────────────────────────── */
+
+.previewSection {
+  margin-top: 24px;
+}
+
+.previewTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 12px;
+}
+
+.previewCards {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.previewCard {
+  flex: 1;
+  min-width: 260px;
+  background: #f8f8f8;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.previewSite {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.previewUrlRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+
+.previewUrl {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: #666;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.previewActions {
+  display: flex;
+  gap: 8px;
+}
+
+.previewBtn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+}
+
+.previewBtn:hover {
+  background: #f0f0f0;
+}
