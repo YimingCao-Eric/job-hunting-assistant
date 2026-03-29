@@ -12,7 +12,6 @@ class SearchConfigRead(BaseModel):
     indeed_radius: int | None = None
     indeed_explvl: str | None = None
     indeed_lang: str | None = None
-    indeed_enabled: bool = False
     general_date_posted: int = 1
     general_internship_only: bool = False
     general_remote_only: bool = False
@@ -39,7 +38,6 @@ class SearchConfigUpdate(BaseModel):
     indeed_radius: int | None = None
     indeed_explvl: str | None = None
     indeed_lang: str | None = None
-    indeed_enabled: bool | None = None
     general_date_posted: int | None = None
     general_internship_only: bool | None = None
     general_remote_only: bool | None = None

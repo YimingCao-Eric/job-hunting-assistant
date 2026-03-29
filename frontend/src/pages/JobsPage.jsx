@@ -64,10 +64,6 @@ function JobModal({ job, onClose }) {
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const posted = job.post_datetime
-    ? new Date(job.post_datetime).toLocaleDateString()
-    : null
-
   const jdLines = (job.job_description || '').split('\n')
 
   return (
@@ -112,9 +108,32 @@ function JobModal({ job, onClose }) {
           {job.job_title || 'Unknown'}
         </h2>
         <div style={{ color: '#555', fontSize: '14px', marginBottom: '12px' }}>
-          {[job.company, formatLocation(job.location), posted ? `Posted ${posted}` : null]
+          {[job.company, formatLocation(job.location)]
             .filter(Boolean).join(' \u00b7 ')}
         </div>
+
+        {job.website === 'linkedin' && job.created_at && (
+          <div className={s.modalDates}>
+            <div>
+              <span className={s.modalDateLabel}>Originally posted:</span>{' '}
+              {job.post_datetime
+                ? new Date(job.post_datetime).toLocaleDateString('en-CA', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                  })
+                : '\u2014'}
+            </div>
+            <div>
+              <span className={s.modalDateLabel}>Scraped by JHA:</span>{' '}
+              {new Date(job.created_at).toLocaleDateString('en-CA', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+              })}
+            </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', flexWrap: 'wrap' }}>
           {(job.apply_url || job.job_url) && (
@@ -612,9 +631,17 @@ export default function JobsPage() {
                     <div className={s.cardLocation}>
                       <>{'\ud83d\udccd'} {formatLocation(job.location)}</>
                     </div>
-                    <div className={s.cardTime}>
-                      {formatAbsoluteTime(job.post_datetime)}
-                    </div>
+                    {job.website === 'linkedin' && (
+                      <div className={s.dateRow}>
+                        <span className={s.dateLabel}>
+                          Posted: {formatAbsoluteTime(job.post_datetime)}
+                        </span>
+                        <span className={s.dateSeparator}> · </span>
+                        <span className={s.dateLabel}>
+                          Scraped: {formatAbsoluteTime(job.created_at)}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

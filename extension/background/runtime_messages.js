@@ -45,20 +45,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return false;
     }
-    (async () => {
-      try {
-        const result = await handleIngest(message.job);
-        sendResponse(result);
-      } catch (e) {
-        console.error("[JHA] handleIngest failed:", e.message);
-        sendResponse({
-          id: null,
-          already_exists: false,
-          content_duplicate: false,
-          error: e.message,
-        });
-      }
-    })();
+    handleIngest(message.job)
+      .then((result) => sendResponse(result ?? null))
+      .catch((err) => {
+        console.error("[JHA] handleIngest error:", err.message);
+        sendResponse(null);
+      });
     return true;
   }
   if (message.type === "GET_TAB_ID") {

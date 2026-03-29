@@ -2,19 +2,6 @@
 
 const MIN_JD_LEN = 50;
 
-/** Storage pings every 5s while `fetch` runs so the MV3 SW stays awake. */
-async function withSwKeepalive(asyncFn) {
-  let interval = null;
-  try {
-    interval = setInterval(() => {
-      chrome.storage.local.set({ _swKeepalive: Date.now() });
-    }, 5000);
-    return await asyncFn();
-  } finally {
-    if (interval) clearInterval(interval);
-  }
-}
-
 function getCsrfToken() {
   const match = document.cookie.match(/JSESSIONID=([^;]+)/);
   return match ? match[1].replace(/"/g, "") : null;
@@ -31,18 +18,16 @@ async function fetchCompanyName(companyUrn, csrfToken) {
   );
   const fetchPromise = (async () => {
     try {
-      const res = await withSwKeepalive(() =>
-        fetch(
-          `https://www.linkedin.com/voyager/api/entities/companies/${companyId}`,
-          {
-            credentials: "include",
-            headers: {
-              "csrf-token": csrfToken,
-              Accept: "application/vnd.linkedin.normalized+json+2.1",
-              "x-restli-protocol-version": "2.0.0",
-            },
-          }
-        )
+      const res = await fetch(
+        `https://www.linkedin.com/voyager/api/entities/companies/${companyId}`,
+        {
+          credentials: "include",
+          headers: {
+            "csrf-token": csrfToken,
+            Accept: "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+          },
+        }
       );
       if (!res.ok) return null;
       const data = await res.json();
@@ -71,19 +56,17 @@ async function fetchJDViaVoyager(jobId) {
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const res = await withSwKeepalive(() =>
-        fetch(
-          `https://www.linkedin.com/voyager/api/jobs/jobPostings/${jobId}`,
-          {
-            credentials: "include",
-            headers: {
-              "csrf-token": csrfToken,
-              Accept: "application/vnd.linkedin.normalized+json+2.1",
-              "x-restli-protocol-version": "2.0.0",
-              "x-li-lang": "en_US",
-            },
-          }
-        )
+      const res = await fetch(
+        `https://www.linkedin.com/voyager/api/jobs/jobPostings/${jobId}`,
+        {
+          credentials: "include",
+          headers: {
+            "csrf-token": csrfToken,
+            Accept: "application/vnd.linkedin.normalized+json+2.1",
+            "x-restli-protocol-version": "2.0.0",
+            "x-li-lang": "en_US",
+          },
+        }
       );
       console.log(`[JHA] Voyager ${jobId}: status=${res.status}`);
       if (res.status === 429) {
@@ -113,14 +96,6 @@ async function fetchJDViaVoyager(jobId) {
           data?.data?.applyMethod?.companyApplyUrl ||
           data?.data?.applyMethod?.easyApplyUrl ||
           null;
-        let safeVoyagerRaw = null;
-        try {
-          safeVoyagerRaw = JSON.parse(JSON.stringify(data));
-        } catch (e) {
-          console.warn(
-            `[JHA] Voyager ${jobId}: serialization failed: ${e.message}`
-          );
-        }
         const companyUrn = data?.data?.companyDetails?.company || null;
         const companyName = await fetchCompanyName(companyUrn, csrfToken);
         const applyMethod = data?.data?.applyMethod;
@@ -132,7 +107,6 @@ async function fetchJDViaVoyager(jobId) {
         return {
           jd: trimmed,
           apply_url,
-          voyager_raw: safeVoyagerRaw,
           title: data?.data?.title || null,
           location: data?.data?.formattedLocation || null,
           listedAt:

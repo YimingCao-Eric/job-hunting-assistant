@@ -180,7 +180,13 @@ export default function ConfigPage() {
             maxSalary: g.maxSalary != null ? g.maxSalary : null,
             minRating: g.minRating != null ? g.minRating : null,
             jobType: g.jobType != null ? g.jobType : null,
-            seniorityType: g.seniorityType != null ? g.seniorityType : null,
+            seniorityType: (() => {
+              const stored = g.seniorityType != null ? g.seniorityType : null
+              if (!data.general_internship_only && stored === 'internship') {
+                return null
+              }
+              return stored
+            })(),
           },
         }
         setConfig(next)
@@ -249,9 +255,11 @@ export default function ConfigPage() {
           : null
       const gd_seniorityType_final = config.general_internship_only
         ? 'internship'
-        : g.seniorityType === '' || g.seniorityType == null
+        : g.seniorityType === 'internship'
           ? null
-          : g.seniorityType
+          : g.seniorityType === '' || g.seniorityType == null
+            ? null
+            : g.seniorityType
 
       await api.updateConfig({
         website: config.website,

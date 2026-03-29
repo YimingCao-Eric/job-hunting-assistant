@@ -47,7 +47,7 @@ async function processGlassdoorCard(cardEl, config, counters, settings) {
     job_url:         cardData.jobUrl,
     apply_url:       cardData.jobUrl,
     job_description: jdResult.jd,
-    easy_apply:      cardData.easyApply || false,
+    easy_apply:      jdResult.easy_apply ?? false,
     post_datetime:   null,
     search_filters: {
       website: "glassdoor",

@@ -51,7 +51,7 @@ extension/
 │   │   └── init.js                  Entry: wait for scanInProgress + scanConfig (same as LinkedIn)
 │   └── glassdoor/                   No shared/*.js — self-contained scripts, load order matters
 │       ├── parse.js                 parseGlassdoorCard — DOM fields + jl from card/listing URL
-│       ├── fetch_jd.js              GET job-listing HTML → __NEXT_DATA__ / JSON-LD / DOM fallback, 10s abort
+│       ├── fetch_jd.js              GET job-listing HTML → __NEXT_DATA__ / JSON-LD / DOM; directApply → easy_apply
 │       ├── process.js               Per-card JD + INGEST_JOB (phantom / rateLimited handling)
 │       ├── page.js                  scanGlassdoorPage — cards loop, early stop, rate-limit cooldown
 │       └── init.js                  Manual: scanInProgress + scanConfig.website===glassdoor → scan + scanComplete; else optional debounced auto-scan (GET_CONFIG, SCAN_STARTED, SCAN_COMPLETE)
@@ -127,7 +127,7 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 
 | Function | Description |
 | --- | --- |
-| *(listener)* | On `scanComplete` in storage, clears scan timeout, PUTs completed run log, clears progress, removes the scan tab (`chrome.tabs.remove`). |
+| *(listener)* | On `scanComplete` in storage, clears scan timeout, **PUT**s **`/extension/run-log/{runId}`** with `status: "completed"`, counters (`pages_scraped`, `scraped`, `new_jobs`, `existing`, `stale_skipped`, `jd_failed`, `early_stop`), and **`errors`** (from `summary.errors` / `pushScanError`, max **200** per site), then removes `scanComplete` / `scanPageState` from storage, sets **`lastRunSummary`**, removes the scan tab (`chrome.tabs.remove`). |
 
 ### `background/tabs_safety.js`
 
@@ -166,7 +166,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `ingestJob(jobData)` | **`_swHeartbeat`** + **150ms**, then **`INGEST_JOB`** with **`correlationId`**. Background **acks immediately** and returns the real payload via **`INGEST_JOB_RESULT`** (`chrome.tabs.sendMessage`) so slow **`/jobs/ingest`** does not hit the message-channel timeout. Retries **3** times with **3s / 4s / 6s** delays if no result. |
+| `ingestJob(jobData)` | **`_swHeartbeat`** + **150ms**, then **`INGEST_JOB`** with **`correlationId`**. Background **acks immediately** and returns the real payload via **`INGEST_JOB_RESULT`**. Waits up to **60s** per attempt for **`INGEST_JOB_RESULT`**, then retries (**3** attempts, **1s / 2s / 3s** backoff). |
 | `recordSkip(website, cardData, reason, runId)` | Same **`correlationId` / `INGEST_JOB_RESULT`** pattern as `ingestJob`. |
 
 ### `content/linkedin/constants.js`
@@ -187,12 +187,11 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | Function | Description |
 | --- | --- |
 | `getCards(silent)` | Finds job cards using `JOB_CARD_SELECTORS`. |
-| `waitForCards(timeoutMs)` | Polls every **300ms** (default **8s** max) until **≥1** list node exists (DOM mounted). |
-| `collectOccludableJobIds()` | Unique job ids from **`[data-occludable-job-id]`** (all shells on the SERP). |
+| `waitForCards(timeoutMs)` | Stabilization: **≥25** cards, or **>0** count stable **1s**, or timeout; else returns last **`getCards(true)`**. |
 | `getJobId(card)` | Reads LinkedIn job id from attributes or job view link. |
 | `checkSession()` | Returns session status: `live`, `captcha`, `expired`, or `redirected`. |
 | `reportSessionError(error)` | Sends `SESSION_ERROR` with the error key. |
-| `extractCardData(card)` | Optional DOM read (not used by the main Voyager scan). |
+| `extractCardData(card)` | Title, company, location, time, URL, easy apply from the card DOM. |
 | `isStale(post_datetime)` | Returns true if posting time is older than 48 hours. |
 
 ### `content/linkedin/voyager.js`
@@ -201,19 +200,20 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | --- | --- |
 | `getCsrfToken()` | Extracts CSRF token from `JSESSIONID` cookie for Voyager requests. |
 | `fetchCompanyName(companyUrn, csrfToken)` | Fetches company display name from Voyager entities API; wrapped in **`Promise.race` with a 3s timeout** so a hung fetch does not block the scan indefinitely. |
-| `fetchJDViaVoyager(jobId)` | Wraps each Voyager **`fetch()`** in **`withSwKeepalive()`** (storage ping every **5s** while the request is in flight). Up to **2** attempts, **500ms** apart. Minimum JD length **50** chars (trimmed). **429** → 60s pause then `null`. |
+| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Minimum JD length **50** chars (trimmed). **429** → 60s pause then `null`. Omits **`voyager_raw`** from ingest payloads. |
 
 ### `content/linkedin/process.js`
 
 | Function | Description |
 | --- | --- |
 | `pushScanError(counters, entry)` | Caps **`errors`** at **200** entries for run logs. |
+| `processCard(card, config, counters, preExtractedCardData?)` | Uses **`preExtractedCardData`** when provided (from **`page.js`**); else **`extractCardData(card)`**. Voyager + **`ingestJob`** unchanged. |
 
 ### `content/linkedin/page.js`
 
 | Function | Description |
 | --- | --- |
-| `runSinglePage(config, state)` | After **`waitForCards`**, **`collectOccludableJobIds()`** (unique **`data-occludable-job-id`** values, including empty Ember shells). For each id: **`cardDelay`**, **`fetchJDViaVoyager`**, **`isStale`** from Voyager **`listedAt`**, then **`ingestJob`** with Voyager + **`search_filters`** (no DOM card extraction). Duplicate early-stop, bottom scroll, PUT state, **`NAVIGATE_SCAN_TAB`**. |
+| `runSinglePage(config, state, processedJobIds, processedTitleCompany)` | After **`waitForCards`**: skip duplicate **`job_id`**; **`extractCardData`**; from **page 2+**, skip if **`title|company`** (lowercased) already seen (promoted cards with new ids per page). **`processCard(..., cardData)`** to avoid double extraction. Persists **`processed_job_ids`** + **`processed_title_company`** in **`scanPageState`**. Duplicate early-stop, bottom scroll, **`NAVIGATE_SCAN_TAB`**. |
 
 ### `content/linkedin/overlay.js`
 
@@ -253,7 +253,9 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `processCard(anchor, config, counters)` | Validates `jk`, fetches JD, calls `ingestJob` with Indeed fields, updates counters. |
+| `pushScanError(counters, entry)` | Same cap (**200**) as LinkedIn/Glassdoor for run-log **`errors`**. |
+| `parseIndeedPostDate(snippets)` | Derives ISO **`post_datetime`** from card snippet lines (e.g. “30 days ago”, “just posted”) when parseable; else `null`. |
+| `processCard(anchor, config, counters)` | Validates `jk`, fetches JD, calls `ingestJob` with Indeed fields (including **`post_datetime`** from **`parseIndeedPostDate`**), updates counters. |
 
 ### `content/indeed/page.js`
 
@@ -284,13 +286,14 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `fetchGlassdoorJD(jobUrl, jl, scanDelay)` | **GET** the job-listing **`jobUrl`** (`credentials: include`, **10s** abort). Parses JD from embedded **`__NEXT_DATA__`** JSON (Next.js), then JSON-LD, then DOM selectors on parsed HTML. **429/503** → **`{ rateLimited: true }`**; no usable description → **`{ phantom: true }`**; else **`{ jd }`** or `null` (timeout / HTTP error). |
+| `fetchGlassdoorJD(jobUrl, jl, scanDelay)` | **GET** the job-listing **`jobUrl`** (`credentials: include`, **20s** abort). Parses JD from **`__NEXT_DATA__`**, JSON-LD, or DOM. Reads JSON-LD **`JobPosting.directApply`** for **`easy_apply`**. **429/503** → **`{ rateLimited: true, easy_apply: false }`**; phantom → **`{ phantom: true }`**; success → **`{ jd, easy_apply }`**. |
 
 ### `content/glassdoor/process.js`
 
 | Function | Description |
 | --- | --- |
-| `processGlassdoorCard(cardEl, config, counters, settings)` | `INGEST_JOB` with **`{ job }`** (not `ingestJob()` helper). Handles phantom (stale_skipped), rateLimited, jd_failed, duplicates. |
+| `pushScanError(counters, entry)` | Caps **`errors`** at **200** for run logs (same pattern as LinkedIn/Indeed). |
+| `processGlassdoorCard(cardEl, config, counters, settings)` | `INGEST_JOB` with **`{ job }`** (not `ingestJob()` helper). Ingest uses **`post_datetime: null`**. Handles phantom (stale_skipped), rateLimited, jd_failed, duplicates. |
 
 ### `content/glassdoor/page.js`
 
@@ -316,7 +319,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | `showWarningBanner(errorType)` | Shows session warning from `lastSessionError`. |
 | `clearWarning()` | Clears session error from storage and hides banner. |
 | `loadSettings()` | Loads storage into fields and resumes polling if a scan is active. |
-| `loadConfig()` | GETs `/config` and fills **only** the fields listed in `CONFIG_FIELDS` in `popup.js` (keyword, location, `f_tpr_bound`, experience/job-type/remote filters, `salary_min`). **There are no popup inputs for `website`, `indeed_*`, `indeed_enabled`, or nested `glassdoor`** — configure those via the **web app Config page** or PUT `/config` directly; the service worker still reads the full config from the backend when a scan starts. |
+| `loadConfig()` | GETs `/config` and fills **only** the fields listed in `CONFIG_FIELDS` in `popup.js` (keyword, location, `f_tpr_bound`, experience/job-type/remote filters, `salary_min`). **There are no popup inputs for `website`, `indeed_*`, or nested `glassdoor`** — configure those via the **web app Config page** or PUT `/config` directly; the service worker still reads the full config from the backend when a scan starts. |
 | `saveSettings()` | Writes `backendUrl`, `authToken`, `scanDelay` to storage and PUTs the same **subset** of config keys as `loadConfig()`. |
 | `startScan()` | Hides scan button, sends `MANUAL_SCAN`, starts progress polling. |
 | `stopScan()` | Sends `STOP_SCAN` and updates UI. |
@@ -334,8 +337,9 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 3. **LinkedIn:** `init()` → `runSinglePage()` → job ids from **`data-occludable-job-id`** + Voyager + **`ingestJob`**. **Indeed:** loops **`processCard()`** over result cards. **Glassdoor:** `glassdoorMain()` waits for **`scanInProgress`** + **`scanConfig.website === "glassdoor"`**, then **`scanGlassdoorPage()`** → **`processGlassdoorCard()`** (single SERP page; completion via **`scanComplete`** like other sites).
 4. **LinkedIn:** `fetchJDViaVoyager()` → Voyager APIs → `ingestJob()` sends `{ type: "INGEST_JOB", job }`. **Indeed:** `fetchIndeedJD()` in **`rate_strategy.js`** → same `ingestJob()` path. **Glassdoor:** `fetchGlassdoorJD()` (job-listing HTML + **`__NEXT_DATA__`**) → **`processGlassdoorCard`** sends `{ type: "INGEST_JOB", job }` directly (does not use `shared/messaging.js`).
 5. `background/ingest.js` `handleIngest()` POSTs to `/jobs/ingest`; the backend persists the job.
-6. The web app (or other client) loads jobs via the backend API (e.g. GET `/jobs`); the extension popup only mirrors **live** counters from `chrome.storage.local` (`liveProgress`), not the full job list.
-7. When a page finishes without navigating onward, or on error, `init()` sets `scanComplete` in storage → `scan_completion.js` PUTs the run log as completed and closes the scan tab/window.
+6. **`post_datetime` on ingest:** **LinkedIn** — card `<time datetime>` and/or Voyager **`listedAt`** (see `content/linkedin/process.js`). **Indeed** — **`parseIndeedPostDate`** from card snippet text when it matches posted/active patterns (`content/indeed/process.js`). **Glassdoor** — **`null`** (listing age is not sent). The web app Jobs page may show “Posted” / “Scraped” using **`post_datetime`** and **`created_at`** for **LinkedIn** jobs only; other sites omit that row in the UI.
+7. The web app (or other client) loads jobs via the backend API (e.g. GET `/jobs`); the extension popup only mirrors **live** counters from `chrome.storage.local` (`liveProgress`), not the full job list.
+8. When a page finishes without navigating onward, or on error, `init()` sets `scanComplete` in storage → `scan_completion.js` PUTs the run log as completed and closes the scan tab/window.
 
 ## Message Reference
 

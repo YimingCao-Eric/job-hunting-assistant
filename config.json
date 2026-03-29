@@ -13,7 +13,7 @@
   "location": "Canada",
   "f_tpr_bound": 24,
   "f_experience": "2,3,4",
-  "f_job_type": null,
+  "f_job_type": "C,F,P,T",
   "f_remote": null,
   "salary_min": 0,
   "scan_delay": "normal",
@@ -27,12 +27,13 @@
     "keyword_slug": "software-engineer",
     "country_code": "IN3",
     "fromAge": 1,
+    "applicationType": null,
     "remoteWorkType": null,
     "minSalary": null,
     "maxSalary": null,
     "minRating": null,
     "jobType": null,
-    "seniorityType": "internship",
+    "seniorityType": null,
     "sortBy": "date_desc"
   },
   "linkedin_f_tpr": null

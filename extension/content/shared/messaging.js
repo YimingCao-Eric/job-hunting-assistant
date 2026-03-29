@@ -38,36 +38,41 @@ async function ingestJob(jobData) {
 
     const result = await new Promise((resolve) => {
       let finished = false;
-      const timeout = setTimeout(() => {
+      const localTimeout = setTimeout(() => {
         if (finished) return;
         finished = true;
         _ingestResultWaiters.delete(correlationId);
         resolve(undefined);
-      }, 60000);
+      }, 12000);
 
       const settle = (r) => {
         if (finished) return;
         finished = true;
-        clearTimeout(timeout);
+        clearTimeout(localTimeout);
         _ingestResultWaiters.delete(correlationId);
         resolve(r);
       };
 
       _ingestResultWaiters.set(correlationId, settle);
 
-      chrome.runtime.sendMessage(
-        { type: "INGEST_JOB", job: jobData, correlationId },
-        (ack) => {
-          if (chrome.runtime.lastError || !ack?.ack) {
-            settle(undefined);
+      try {
+        chrome.runtime.sendMessage(
+          { type: "INGEST_JOB", job: jobData, correlationId },
+          (ack) => {
+            if (chrome.runtime.lastError || !ack?.ack) {
+              settle(undefined);
+            }
           }
-        }
-      );
+        );
+      } catch (e) {
+        clearTimeout(localTimeout);
+        settle(undefined);
+      }
     });
 
     if (result !== undefined) return result;
 
-    const delay = attempt === 1 ? 3000 : attempt * 2000;
+    const delay = attempt * 1000;
     console.warn(
       `[JHA] Ingest: no response (attempt ${attempt}/3) for: ${jobData?.job_title}, retrying in ${delay}ms`
     );
@@ -108,31 +113,36 @@ async function recordSkip(website, cardData, reason, runId) {
 
     const result = await new Promise((resolve) => {
       let finished = false;
-      const timeout = setTimeout(() => {
+      const localTimeout = setTimeout(() => {
         if (finished) return;
         finished = true;
         _ingestResultWaiters.delete(correlationId);
         resolve(undefined);
-      }, 60000);
+      }, 12000);
 
       const settle = (r) => {
         if (finished) return;
         finished = true;
-        clearTimeout(timeout);
+        clearTimeout(localTimeout);
         _ingestResultWaiters.delete(correlationId);
         resolve(r);
       };
 
       _ingestResultWaiters.set(correlationId, settle);
 
-      chrome.runtime.sendMessage(
-        { type: "INGEST_JOB", job, correlationId },
-        (ack) => {
-          if (chrome.runtime.lastError || !ack?.ack) {
-            settle(undefined);
+      try {
+        chrome.runtime.sendMessage(
+          { type: "INGEST_JOB", job, correlationId },
+          (ack) => {
+            if (chrome.runtime.lastError || !ack?.ack) {
+              settle(undefined);
+            }
           }
-        }
-      );
+        );
+      } catch (e) {
+        clearTimeout(localTimeout);
+        settle(undefined);
+      }
     });
 
     if (result !== undefined) return result;
@@ -140,7 +150,7 @@ async function recordSkip(website, cardData, reason, runId) {
     await new Promise((resolve) =>
       chrome.storage.local.set({ _swRetry: attempt }, resolve)
     );
-    await new Promise((r) => setTimeout(r, attempt === 1 ? 3000 : attempt * 2000));
+    await new Promise((r) => setTimeout(r, attempt * 1000));
     await new Promise((resolve) =>
       chrome.storage.local.set({ _swHeartbeat: Date.now() }, resolve)
     );

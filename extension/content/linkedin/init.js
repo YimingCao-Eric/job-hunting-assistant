@@ -48,7 +48,20 @@ async function init() {
         chrome.runtime.sendMessage({ type: "GET_EXTENSION_STATE" }, resolve)
       ));
 
-    summary = await runSinglePage(config, state);
+    const processedJobIds = new Set(
+      Array.isArray(state.processed_job_ids) ? state.processed_job_ids : []
+    );
+    const processedTitleCompany = new Set(
+      Array.isArray(state.processed_title_company)
+        ? state.processed_title_company
+        : []
+    );
+    summary = await runSinglePage(
+      config,
+      state,
+      processedJobIds,
+      processedTitleCompany
+    );
 
     if (summary.done) {
       hideScanOverlay();

@@ -6,8 +6,8 @@ function pushScanError(counters, entry) {
   counters.errors.push(entry);
 }
 
-async function processCard(card, config, counters) {
-  const cardData = extractCardData(card);
+async function processCard(card, config, counters, preExtractedCardData = null) {
+  const cardData = preExtractedCardData || extractCardData(card);
   if (!cardData) return { skipped: true };
   if (!cardData.job_id) {
     counters.id_skipped = (counters.id_skipped || 0) + 1;
@@ -78,7 +78,6 @@ async function processCard(card, config, counters) {
       f_remote: config.f_remote,
       salary_min: config.salary_min,
     },
-    voyager_raw: voyagerResult.voyager_raw,
     scan_run_id: config.runId,
   };
 

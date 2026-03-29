@@ -6,6 +6,47 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Collect JobPosting objects from JSON-LD (single object, @graph, nested).
+ */
+function collectJobPostingObjects(node, out) {
+  if (!node || typeof node !== "object") return;
+  const t = node["@type"];
+  const types = Array.isArray(t) ? t : t != null ? [t] : [];
+  if (types.includes("JobPosting")) out.push(node);
+  if (Array.isArray(node["@graph"])) {
+    for (const g of node["@graph"]) {
+      collectJobPostingObjects(g, out);
+    }
+  }
+}
+
+/**
+ * Parse JSON-LD scripts for JobPosting.directApply (Glassdoor lists true/false).
+ */
+function extractJsonLdEasyApply(html) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  const scripts = Array.from(
+    doc.querySelectorAll('script[type="application/ld+json"]')
+  );
+  for (const script of scripts) {
+    try {
+      const j = JSON.parse(script.textContent);
+      const postings = [];
+      collectJobPostingObjects(j, postings);
+      for (const jp of postings) {
+        if (Object.prototype.hasOwnProperty.call(jp, "directApply")) {
+          return jp.directApply === true;
+        }
+      }
+    } catch {
+      /* next script */
+    }
+  }
+  return false;
+}
+
 async function fetchGlassdoorJD(jobUrl, jl, scanDelay) {
   if (!jobUrl) return null;
 
@@ -30,13 +71,16 @@ async function fetchGlassdoorJD(jobUrl, jl, scanDelay) {
       });
       clearTimeout(timeout);
 
-      if (res.status === 429 || res.status === 503) return { rateLimited: true };
+      if (res.status === 429 || res.status === 503) {
+        return { rateLimited: true, easy_apply: false };
+      }
       if (!res.ok) {
         console.warn(`[JHA-Glassdoor] fetch_jd: HTTP ${res.status} for jl=${jl} url=${safeUrl}`);
         return null;
       }
 
       const html = await res.text();
+      const easyApplyFromLd = extractJsonLdEasyApply(html);
 
       // Strategy 1: __NEXT_DATA__ (most reliable — Glassdoor is Next.js)
       const nextMatch = html.match(
@@ -53,7 +97,9 @@ async function fetchGlassdoorJD(jobUrl, jl, scanDelay) {
             null;
           if (desc) {
             const clean = desc.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-            if (clean.length >= 100) return { jd: clean };
+            if (clean.length >= 100) {
+              return { jd: clean, easy_apply: easyApplyFromLd };
+            }
           }
         } catch (e) {
           /* fall through */
@@ -68,7 +114,9 @@ async function fetchGlassdoorJD(jobUrl, jl, scanDelay) {
           const desc = d?.description || d?.jobDescription || null;
           if (desc) {
             const clean = desc.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-            if (clean.length >= 100) return { jd: clean };
+            if (clean.length >= 100) {
+              return { jd: clean, easy_apply: easyApplyFromLd };
+            }
           }
         } catch (e) {
           /* fall through */
@@ -83,11 +131,13 @@ async function fetchGlassdoorJD(jobUrl, jl, scanDelay) {
       );
       if (el) {
         const clean = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (clean.length >= 100) return { jd: clean };
+        if (clean.length >= 100) {
+          return { jd: clean, easy_apply: easyApplyFromLd };
+        }
       }
 
       console.warn(`[JHA-Glassdoor] fetch_jd: no JD found for jl=${jl} url=${safeUrl}`);
-      return { phantom: true };
+      return { phantom: true, easy_apply: false };
     } catch (err) {
       clearTimeout(timeout);
       if (attempt < 2) {

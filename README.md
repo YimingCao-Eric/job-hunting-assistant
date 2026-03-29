@@ -116,7 +116,6 @@ Search parameters live in `config.json` (path set by `CONFIG_PATH` in Docker). E
 | `indeed_radius` | Radius (km) |
 | `indeed_explvl` | Experience level (`ENTRY_LEVEL`, etc.) |
 | `indeed_lang` | Language (`en`, `fr`, …) |
-| `indeed_enabled` | UI helper to show Indeed options when `website` is LinkedIn |
 
 **Local defaults (development):** backend `http://localhost:8000`, API auth header `Authorization: Bearer dev-token`.
 
