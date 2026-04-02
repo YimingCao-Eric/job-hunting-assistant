@@ -25,7 +25,7 @@ export function buildGlassdoorPreviewUrl(g) {
   if (g.minSalary != null) params.set('minSalary', g.minSalary)
   if (g.maxSalary != null) params.set('maxSalary', g.maxSalary)
   if (g.minRating != null) params.set('minRating', g.minRating)
-  if (g.jobType != null) params.set('jobType', g.jobType)
+  if (g.jobType) params.set('jobType', g.jobType)
   if (g.seniorityType != null) params.set('seniorityType', g.seniorityType)
   params.set('sortBy', 'date_desc')
   const qs = params.toString()

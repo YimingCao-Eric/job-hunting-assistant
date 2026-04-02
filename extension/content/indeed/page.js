@@ -19,7 +19,7 @@ async function runSinglePage(config, state) {
   }
   if (cards.length === 0) {
     console.log("[JHA-Indeed] No cards — done");
-    return { ...counters, pages_scanned: currentPage, early_stop: false, done: true };
+    return { ...counters, pages_scanned: currentPage, done: true };
   }
 
   console.log("[JHA-Indeed] Page " + currentPage + ": " + cards.length + " cards");
@@ -27,14 +27,14 @@ async function runSinglePage(config, state) {
   for (const anchor of cards) {
     const { stopRequested } = await chrome.storage.local.get("stopRequested");
     if (stopRequested) {
-      return { ...counters, pages_scanned: currentPage, early_stop: true, done: true };
+      return { ...counters, pages_scanned: currentPage, done: true };
     }
 
     const result = await processCard(anchor, config, counters);
 
     if (result && result.rateLimited) {
       console.warn("[JHA-Indeed] Rate limited — aborting scan");
-      return { ...counters, pages_scanned: currentPage, early_stop: true, done: true };
+      return { ...counters, pages_scanned: currentPage, done: true };
     }
   }
 
@@ -56,12 +56,12 @@ async function runSinglePage(config, state) {
   );
   if (!nextBtn || nextBtn.disabled) {
     console.log("[JHA-Indeed] No next button — done");
-    return { ...counters, pages_scanned: currentPage, early_stop: false, done: true };
+    return { ...counters, pages_scanned: currentPage, done: true };
   }
 
   const nextHref = nextBtn.getAttribute("href");
   if (!nextHref) {
-    return { ...counters, pages_scanned: currentPage, early_stop: false, done: true };
+    return { ...counters, pages_scanned: currentPage, done: true };
   }
 
   const nextUrl = nextHref.startsWith("http")
@@ -81,5 +81,5 @@ async function runSinglePage(config, state) {
     chrome.runtime.sendMessage({ type: "NAVIGATE_SCAN_TAB", url: nextUrl }, resolve)
   );
 
-  return { ...counters, pages_scanned: currentPage, early_stop: false, done: false };
+  return { ...counters, pages_scanned: currentPage, done: false };
 }

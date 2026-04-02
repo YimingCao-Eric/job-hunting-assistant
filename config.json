@@ -16,7 +16,6 @@
   "f_job_type": "C,F,P,T",
   "f_remote": null,
   "salary_min": 0,
-  "scan_delay": "normal",
   "general_date_posted": 1,
   "general_internship_only": false,
   "general_remote_only": false,
@@ -36,5 +35,5 @@
     "seniorityType": null,
     "sortBy": "date_desc"
   },
-  "linkedin_f_tpr": null
+  "linkedin_f_tpr": "24"
 }

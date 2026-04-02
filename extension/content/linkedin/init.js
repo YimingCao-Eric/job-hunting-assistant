@@ -92,7 +92,6 @@ async function init() {
           stale_skipped: 0,
           jd_failed: 0,
           pages_scanned: 0,
-          early_stop: false,
           errors: [],
           error: e.message,
         },

@@ -1,99 +1,108 @@
 /* ── Indeed JD fetch — GraphQL API (apis.indeed.com) ─────────────────── */
 
-async function _strategy6(jk, scanDelay) {
+async function _strategy6(jk, apiKey) {
+  if (!apiKey) {
+    console.warn("[JHA-Indeed] strategy6: no apiKey");
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  let res;
   try {
-    let apiKey = document.head.getAttribute("data-jha-api-key");
-
-    if (!apiKey) {
-      const result = await new Promise((resolve) =>
-        chrome.runtime.sendMessage({ type: "GET_MAIN_WORLD_VALUE" }, resolve)
-      );
-      apiKey = result?.value || null;
-      if (apiKey) {
-        document.head.setAttribute("data-jha-api-key", apiKey);
-      }
-    }
-
-    if (!apiKey) {
-      console.warn("[JHA-Indeed] strategy6: oneGraphApiKey not found — falling back to null");
-      return null;
-    }
-
-    const query = `
-      query GetJobData($jobDataInput: JobDataInput!) {
-        jobData(input: $jobDataInput) {
-          results {
-            job {
-              description {
-                text
-                html
-              }
-              title
-              employer { name }
-              location {
-                city
-                admin1Name
-                countryCode
-              }
-            }
-          }
-        }
-      }
-    `;
-
-    const res = await fetch("https://apis.indeed.com/graphql", {
+    res = await fetch("https://apis.indeed.com/graphql", {
       method: "POST",
       credentials: "include",
       headers: {
-        "Content-Type": "application/json",
+        "content-type": "application/json",
         "indeed-api-key": apiKey,
         "indeed-co": "CA",
       },
       body: JSON.stringify({
-        query,
-        variables: {
-          jobDataInput: {
-            jobKeys: [jk],
-            useSearchlessPrice: false,
-          },
-        },
+        query: `query { jobData(input: { jobKeys: [${JSON.stringify(jk)}] }) {
+          results { job { title description { text html } } } } }`,
       }),
+      signal: controller.signal,
     });
-
-    if (res.status === 429 || res.status === 503) {
-      console.warn("[JHA-Indeed] strategy6 graphQL " + jk + " status=" + res.status + " — rate limited");
-      return { rateLimited: true };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      console.warn("[JHA-Indeed] GraphQL timeout jk=", jk);
+    } else {
+      console.warn("[JHA-Indeed] fetch error jk=", jk, err.message);
     }
-    if (!res.ok) {
-      console.warn("[JHA-Indeed] strategy6 graphQL " + jk + " status=" + res.status);
-      return null;
-    }
-
-    const data = await res.json();
-    const results = data?.data?.jobData?.results;
-
-    if (!results || results.length === 0) {
-      console.log("[JHA-Indeed] strategy6: phantom jk (no results) " + jk);
-      return { phantom: true };
-    }
-
-    const job = results[0]?.job;
-    const jd = job?.description?.text || job?.description?.html || null;
-
-    if (!jd || jd.length < 100) {
-      console.warn(
-        "[JHA-Indeed] strategy6: JD too short for jk=" + jk + " (len=" + (jd?.length ?? 0) + ")"
-      );
-      return null;
-    }
-
-    return { jd };
-  } catch (e) {
-    console.error("[JHA-Indeed] strategy6 threw:", e.message);
-    return null;
+    return { phantom: true };
   }
+  clearTimeout(timeoutId);
+
+  if (res.status === 429 || res.status === 403) {
+    return { phantom: true };
+  }
+  if (!res.ok) {
+    console.warn("[JHA-Indeed] _strategy6: HTTP", res.status, "jk=", jk);
+    return { phantom: true };
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    return { phantom: true };
+  }
+
+  if (data.errors?.length) {
+    console.warn(
+      "[JHA-Indeed] _strategy6: GraphQL errors jk=",
+      jk,
+      data.errors.map((e) => e.message)
+    );
+    return { phantom: true };
+  }
+
+  const job = data?.data?.jobData?.results?.[0]?.job;
+  if (!job) return { phantom: true };
+
+  const descHtml = job.description?.html;
+  const descText = job.description?.text;
+  let jd = descText;
+  if (descHtml && descHtml.length > 50) {
+    jd = descHtml
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n\n")
+      .replace(/<\/li>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "• ")
+      .replace(/<\/h[1-6]>/gi, "\n\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  if (!jd || jd.length < 50) return { phantom: true };
+  return { jd };
 }
 
-async function fetchIndeedJD(jk, scanDelay) {
-  return _strategy6(jk, scanDelay);
+async function fetchIndeedJD(jk) {
+  let apiKey = document.head.getAttribute("data-jha-api-key");
+
+  if (!apiKey) {
+    const result = await new Promise((resolve) =>
+      chrome.runtime.sendMessage({ type: "GET_MAIN_WORLD_VALUE" }, resolve)
+    );
+    apiKey = result?.value || null;
+    if (apiKey) {
+      document.head.setAttribute("data-jha-api-key", apiKey);
+    }
+  }
+
+  if (!apiKey) {
+    console.warn("[JHA-Indeed] strategy6: oneGraphApiKey not found — falling back to null");
+    return null;
+  }
+
+  return _strategy6(jk, apiKey);
 }

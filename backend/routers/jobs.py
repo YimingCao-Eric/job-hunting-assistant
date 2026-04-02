@@ -1,15 +1,17 @@
 import hashlib
-from datetime import date
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth import get_current_user
 from core.database import get_db
 from models.scraped_job import ScrapedJob
 from schemas.scraped_job import (
+    JobUpdate,
+    JobsListResponse,
     ScrapedJobDetail,
     ScrapedJobIngest,
     ScrapedJobIngestResponse,
@@ -95,7 +97,7 @@ async def ingest_job(
     )
 
 
-@router.get("", response_model=list[ScrapedJobRead])
+@router.get("", response_model=JobsListResponse)
 async def list_jobs(
     website: str | None = None,
     dismissed: bool | None = None,
@@ -103,30 +105,55 @@ async def list_jobs(
     easy_apply: bool | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    scraped_from: date | None = None,
+    scraped_to: date | None = None,
     limit: int = Query(25, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    stmt = select(ScrapedJob).where(ScrapedJob.skip_reason.is_(None))
+    conditions = [ScrapedJob.skip_reason.is_(None)]
 
     if website:
-        stmt = stmt.where(ScrapedJob.website == website)
+        conditions.append(ScrapedJob.website == website)
     if dismissed is not None:
-        stmt = stmt.where(ScrapedJob.dismissed == dismissed)
+        conditions.append(ScrapedJob.dismissed == dismissed)
     if scan_run_id is not None:
-        stmt = stmt.where(ScrapedJob.scan_run_id == scan_run_id)
+        conditions.append(ScrapedJob.scan_run_id == scan_run_id)
     if easy_apply is not None:
-        stmt = stmt.where(ScrapedJob.easy_apply == easy_apply)
+        conditions.append(ScrapedJob.easy_apply == easy_apply)
     if date_from is not None:
-        stmt = stmt.where(ScrapedJob.post_datetime >= date_from)
+        conditions.append(ScrapedJob.post_datetime >= date_from)
     if date_to is not None:
-        stmt = stmt.where(ScrapedJob.post_datetime <= date_to)
+        conditions.append(ScrapedJob.post_datetime <= date_to)
+    if scraped_from is not None:
+        lo = datetime.combine(scraped_from, time.min, tzinfo=dt_timezone.utc)
+        conditions.append(ScrapedJob.created_at >= lo)
+    if scraped_to is not None:
+        hi = datetime.combine(scraped_to, time.min, tzinfo=dt_timezone.utc) + timedelta(
+            days=1
+        )
+        conditions.append(ScrapedJob.created_at < hi)
 
-    stmt = stmt.order_by(ScrapedJob.created_at.desc()).offset(offset).limit(limit)
+    count_stmt = select(func.count()).select_from(ScrapedJob).where(*conditions)
+    total = (await db.execute(count_stmt)).scalar_one()
+
+    stmt = (
+        select(ScrapedJob)
+        .where(*conditions)
+        .order_by(ScrapedJob.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
 
     result = await db.execute(stmt)
-    return result.scalars().all()
+    items = result.scalars().all()
+    return JobsListResponse(
+        items=list(items),
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/skipped", response_model=list[ScrapedJobRead])
@@ -167,17 +194,16 @@ async def get_job(
 @router.put("/{job_id}", response_model=ScrapedJobRead)
 async def update_job(
     job_id: UUID,
-    body: dict,
+    body: JobUpdate,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    result = await db.execute(select(ScrapedJob).where(ScrapedJob.id == job_id))
-    job = result.scalar_one_or_none()
+    job = await db.get(ScrapedJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if "dismissed" in body:
-        job.dismissed = body["dismissed"]
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(job, field, value)
 
     await db.flush()
     await db.refresh(job)

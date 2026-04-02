@@ -16,14 +16,12 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
   }
   counters.scraped++;
 
-  if (cardData.post_datetime && isStale(cardData.post_datetime)) {
-    counters.stale_skipped++;
-    await recordSkip("linkedin", cardData, "stale", config.runId);
-    return { skipped: true };
-  }
-
-  await cardDelay(config.scan_delay || "normal");
-  const voyagerResult = await fetchJDViaVoyager(cardData.job_id);
+  const [voyagerResult] = await Promise.all([
+    fetchJDViaVoyager(cardData.job_id),
+    new Promise((resolve) =>
+      chrome.storage.local.set({ _swHeartbeat: Date.now() }, resolve)
+    ),
+  ]);
   if (!voyagerResult) {
     counters.jd_failed++;
     pushScanError(counters, {
@@ -61,6 +59,12 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
     return { skipped: true };
   }
 
+  const rawApplyUrl = voyagerResult?.apply_url || null;
+  const isEasyApply = !!(
+    rawApplyUrl && rawApplyUrl.includes("linkedin.com/job-apply/")
+  );
+  const applyUrl = isEasyApply ? null : rawApplyUrl;
+
   const jobPayload = {
     website: "linkedin",
     job_title: cardData.job_title,
@@ -68,8 +72,8 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
     location: cardData.location,
     job_description: jdText,
     job_url: cardData.job_url,
-    apply_url: voyagerResult.apply_url,
-    easy_apply: cardData.easy_apply,
+    apply_url: applyUrl,
+    easy_apply: isEasyApply,
     post_datetime: cardData.post_datetime,
     search_filters: {
       f_tpr: config.f_tpr,
@@ -80,11 +84,6 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
     },
     scan_run_id: config.runId,
   };
-
-  await new Promise((resolve) =>
-    chrome.storage.local.set({ _preIngest: Date.now() }, resolve)
-  );
-  await new Promise((r) => setTimeout(r, 100));
 
   const result = await ingestJob(jobPayload);
 

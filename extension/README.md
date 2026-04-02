@@ -4,7 +4,7 @@
 
 This extension automates scanning job search result pages on **LinkedIn** (`linkedin.com/jobs`), **Indeed Canada** (`ca.indeed.com/jobs`), and **Glassdoor Canada** (`glassdoor.ca` / `www.glassdoor.ca`), extracts job details, and **POST**s each job to the Job Hunting Assistant backend (`/jobs/ingest`) using the token and base URL stored in `chrome.storage.local`. **`GET /config`** supplies `config.website`, nested **`config.glassdoor`** (keyword/location slugs, filters), and Indeed/LinkedIn fields; **`background/scan_manual.js`** `handleManualScan(options)` uses **`effectiveWebsite`** (`options.websiteOverride` from **`GET /extension/pending-scan`** when set, else `config.website`, else `"linkedin"`) to choose URL builders (`buildSearchUrl` / `buildIndeedSearchUrl` / **`buildGlassdoorSearchUrl`**), **`scanConfig.website`**, and run-log `search_filters`.
 
-**Starting a scan (two paths):** (1) **Web app — Jobs page** — `POST /extension/trigger-scan` with body `{"website":"linkedin"}`, `{"website":"indeed"}`, or **`{"website":"glassdoor"}`** sets `scan_requested` and `scan_website` in the backend; **`background/poll.js`** polls **`GET /extension/pending-scan` every 3s** and calls `handleManualScan({ websiteOverride })` when `pending` is true (so e.g. LinkedIn can run even if `config.website` is `indeed`). (2) **Extension popup — Scan Now** — sends **`MANUAL_SCAN`** with no override; `handleManualScan()` runs with `effectiveWebsite` from config only.
+**Starting a scan (two paths):** (1) **Web app — Jobs page** — `POST /extension/trigger-scan` with body `{"website":"linkedin"}`, `{"website":"indeed"}`, or **`{"website":"glassdoor"}`** sets `scan_requested` and `scan_website` in the backend; **`background/poll.js`** polls **`GET /extension/pending-scan` every 3s** and calls `handleManualScan({ websiteOverride })` when `pending` is true (so e.g. LinkedIn can run even if `config.website` is `indeed`). The web app can also run **Scan All** (LinkedIn → Indeed → Glassdoor in series); each leg uses the same trigger path. (2) **Extension popup — Scan Now** — sends **`MANUAL_SCAN`** with no override; `handleManualScan()` runs with `effectiveWebsite` from config only.
 
 The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, and nested **`glassdoor`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history and detailed reports live in the **web app** (e.g. Search Report); the extension does not render those UIs.
 
@@ -16,7 +16,7 @@ extension/
 ├── background/
 │   ├── background.js                Service worker entry — importScripts() loads modules below
 │   ├── keepalive.js                 Periodic no-op to reduce MV3 worker suspension
-│   ├── settings.js                  Cached backendUrl / authToken / scanDelay from storage
+│   ├── settings.js                  Cached backendUrl / authToken from storage
 │   ├── config_fetch.js              GET /config and f_TPR computation from run logs
 │   ├── search_urls.js               LinkedIn, Indeed & Glassdoor job search URL builders
 │   ├── scan_manual.js               handleManualScan — reset state, run log, 90min safety timer, open scan in popup window
@@ -30,7 +30,7 @@ extension/
 │   ├── content_style.css            Shared styles (e.g. scan overlay classes where used)
 │   ├── shared/
 │   │   ├── utils.js                 sleep()
-│   │   ├── delays.js                SCAN_DELAYS + cardDelay() for pacing between cards
+│   │   ├── delays.js                SCAN_DELAYS (scroll pacing; used by linkedin/scroll.js)
 │   │   └── messaging.js             ingestJob() + recordSkip() → INGEST_JOB
 │   ├── linkedin/
 │   │   ├── constants.js             Job card & pagination selector lists
@@ -64,7 +64,7 @@ extension/
 
 **Manifest permissions** include **`windows`** (with **`tabs`**, **`storage`**, **`scripting`**, **`activeTab`**) so the background script can open the search URL in a **separate popup window** via `chrome.windows.create` and remove the scan tab by id on completion or force-stop.
 
-**Content scripts** listed under `manifest.json` → `content_scripts` → `js` are plain scripts: they **do not** support `import` / `export` (no ES modules). Chrome injects them **in order** into a **shared global scope** for that match pattern. **LinkedIn and Indeed** list `content/shared/*.js` first so `sleep`, `cardDelay`, `ingestJob`, and `recordSkip` exist before site scripts. **Glassdoor** does not load `shared/*`; it uses only `content/glassdoor/*.js` with **`init.js` last** so `scanGlassdoorPage` / `parseGlassdoorCard` / `fetchGlassdoorJD` are defined before the entry IIFE runs.
+**Content scripts** listed under `manifest.json` → `content_scripts` → `js` are plain scripts: they **do not** support `import` / `export` (no ES modules). Chrome injects them **in order** into a **shared global scope** for that match pattern. **LinkedIn and Indeed** list `content/shared/*.js` first so `sleep`, `SCAN_DELAYS`, `ingestJob`, and `recordSkip` exist before site scripts. **Glassdoor** does not load `shared/*`; it uses only `content/glassdoor/*.js` with **`init.js` last** so `scanGlassdoorPage` / `parseGlassdoorCard` / `fetchGlassdoorJD` are defined before the entry IIFE runs.
 
 The **service worker** uses **`importScripts()`** in `background/background.js`. That API loads additional scripts into the **same global scope** as the worker (like content scripts, no ES modules here). Paths are **relative to the service worker file’s directory** (e.g. `keepalive.js` next to `background.js`). This project does **not** use `"type": "module"` for the background script.
 
@@ -87,7 +87,7 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 
 | Function | Description |
 | --- | --- |
-| `getSettings()` | Returns `backendUrl`, `authToken`, and `scanDelay` from `chrome.storage.local` with a 30s in-memory cache. |
+| `getSettings()` | Returns `backendUrl` and `authToken` from `chrome.storage.local` with a 30s in-memory cache. |
 
 ### `background/config_fetch.js`
 
@@ -100,16 +100,15 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 
 | Function | Description |
 | --- | --- |
-| `salaryToLinkedInFilter(salaryMin)` | Maps minimum salary to LinkedIn `f_SB2` bracket codes. |
 | `buildSearchUrl(config, f_tpr, startOffset)` | Builds LinkedIn job search URL with filters and pagination offset. |
-| `buildIndeedSearchUrl(config, startOffset)` | Builds Indeed Canada job search URL with Indeed-specific query params. |
-| `buildGlassdoorSearchUrl(config)` | Builds Glassdoor Canada SERP URL from `config.glassdoor` (location/keyword slugs, `SRCH_IL` path segment, `fromAge` and other query params). |
+| `buildIndeedSearchUrl(config, startOffset)` | Builds Indeed Canada job search URL with Indeed-specific query params (single **`jt`** from internship shortcut or **`indeed_jt`**). |
+| `buildGlassdoorSearchUrl(config)` | Builds Glassdoor Canada SERP URL from `config.glassdoor` (location/keyword slugs, `SRCH_IL` path segment, `fromAge` and other query params; single **`jobType`** when set). |
 
 ### `background/scan_manual.js`
 
 | Function | Description |
 | --- | --- |
-| `handleManualScan(options)` | Optional `options.websiteOverride` (from poll when frontend triggers scan). Computes **`effectiveWebsite`** and uses it for **LinkedIn vs Indeed vs Glassdoor** branching (`isIndeed` / `isGlassdoor` / else LinkedIn), `scanConfig.website`, run-log `search_filters` (including **`website`**, **`general_date_posted`**, **`general_internship_only`**, **`general_remote_only`**), and search URL. Otherwise: clears `stopRequested`, removes `scanPageState`, returns early if a scan is already in progress. PUTs backend extension state with `current_page: 1` and `today_searches: 0`. Fetches config, calls `computeFtpr(config.f_tpr_bound)` for LinkedIn. Starts the run log via POST, then **`chrome.windows.create`** (`type: "popup"`, 1280×800, `focused: false`) with the search URL, stores **`tabId`** on `scanConfig` with `f_tpr`, `runId`, **`website: effectiveWebsite`**, full config including **`glassdoor`**, and initial `liveProgress`, calls `startKeepAlive()`, **90-minute** safety timeout. |
+| `handleManualScan(options)` | Optional `options.websiteOverride` (from poll when frontend triggers scan). Computes **`effectiveWebsite`** and uses it for **LinkedIn vs Indeed vs Glassdoor** branching (`isIndeed` / `isGlassdoor` / else LinkedIn), `scanConfig.website`, run-log `search_filters` (including **`website`**, **`general_date_posted`**, **`general_internship_only`**, **`general_remote_only`**), and search URL. Otherwise: clears `stopRequested`, removes `scanPageState`, returns early if a scan is already in progress. **First** PUTs **`/extension/state`** with **`stop_requested: false`** only (clears any stale stop flag from a prior run), **then** a second PUT with **`current_page: 1`** and **`today_searches: 0`**. Fetches config, calls `computeFtpr(config.f_tpr_bound)` for LinkedIn. Starts the run log via POST, then **`chrome.windows.create`** (`type: "popup"`, 1280×800, `focused: false`) with the search URL, stores **`tabId`** on `scanConfig` with `f_tpr`, `runId`, **`website: effectiveWebsite`**, full config including **`glassdoor`**, and initial `liveProgress`, calls `startKeepAlive()`, **90-minute** safety timeout. |
 
 ### `background/ingest.js`
 
@@ -158,9 +157,9 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 ### `content/shared/delays.js`
 
-| Function | Description |
+| Constant | Description |
 | --- | --- |
-| `cardDelay(scanDelay)` | Waits a random interval between min/max ms for the chosen speed (`fast` / `normal` / `slow`). |
+| `SCAN_DELAYS` | `fast` / `normal` / `slow` → `{ scroll: [minMs, maxMs] }` for LinkedIn **`scrollDelay()`** (uses **`normal`** only). |
 
 ### `content/shared/messaging.js`
 
@@ -180,7 +179,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `scrollDelay(scanDelay)` | Random wait using the `scroll` range in `SCAN_DELAYS` (for list virtualization pacing). |
+| `scrollDelay()` | Random wait using the `scroll` range in `SCAN_DELAYS.normal` (for list virtualization pacing). |
 
 ### `content/linkedin/dom.js`
 
@@ -192,7 +191,6 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | `checkSession()` | Returns session status: `live`, `captcha`, `expired`, or `redirected`. |
 | `reportSessionError(error)` | Sends `SESSION_ERROR` with the error key. |
 | `extractCardData(card)` | Title, company, location, time, URL, easy apply from the card DOM. |
-| `isStale(post_datetime)` | Returns true if posting time is older than 48 hours. |
 
 ### `content/linkedin/voyager.js`
 
@@ -207,7 +205,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | Function | Description |
 | --- | --- |
 | `pushScanError(counters, entry)` | Caps **`errors`** at **200** entries for run logs. |
-| `processCard(card, config, counters, preExtractedCardData?)` | Uses **`preExtractedCardData`** when provided (from **`page.js`**); else **`extractCardData(card)`**. Voyager + **`ingestJob`** unchanged. |
+| `processCard(card, config, counters, preExtractedCardData?)` | Uses **`preExtractedCardData`** when provided (from **`page.js`**); else **`extractCardData(card)`**. Voyager JD + ingest: if **`apply_url`** is LinkedIn **`job-apply`**, sets **`easy_apply: true`** and **`apply_url: null`** (platform apply); otherwise keeps external ATS URL. |
 
 ### `content/linkedin/page.js`
 
@@ -235,13 +233,13 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | `checkSession()` | Returns `live`, `expired`, or `redirected` for Indeed jobs pages. |
 | `getCards()` | Returns all `a[data-jk]` anchors. |
 | `waitForCards(timeoutMs)` | Waits until card count stabilizes or times out. |
-| `extractCardData(anchor)` | Reads title, company, location, snippets, easy apply, and viewjob URL from card DOM. |
+| `extractCardData(anchor)` | Reads title, company, location, snippets, and viewjob URL from card DOM (card may still expose easy-apply hints; **`processCard`** uses only the job-page **`detectIndeedEasyApply()`** for the stored **`easy_apply`** flag). |
 
 ### `content/indeed/rate_strategy.js`
 
 | Function | Description |
 | --- | --- |
-| `fetchIndeedJD(jk, scanDelay)` | Indeed JD extraction via **`apis.indeed.com/graphql`** (page-injected **`oneGraphApiKey`** via **`GET_MAIN_WORLD_VALUE`**). Returns `{ jd }`, `{ rateLimited: true }`, `{ phantom: true }`, or `null`. |
+| `fetchIndeedJD(jk)` | Indeed JD extraction via **`apis.indeed.com/graphql`** with a **10s `AbortController`** timeout. **`oneGraphApiKey`** is read from the page via **`GET_MAIN_WORLD_VALUE`** (background uses **`chrome.scripting.executeScript`** in the **MAIN** world — only for the key, not from `process.js`). Returns `{ jd }`, `{ rateLimited: true }`, `{ phantom: true }` (timeout / HTTP / GraphQL / empty job / short JD), or `null` if no API key. |
 
 ### `content/indeed/fetch_jd.js`
 
@@ -255,7 +253,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | --- | --- |
 | `pushScanError(counters, entry)` | Same cap (**200**) as LinkedIn/Glassdoor for run-log **`errors`**. |
 | `parseIndeedPostDate(snippets)` | Derives ISO **`post_datetime`** from card snippet lines (e.g. “30 days ago”, “just posted”) when parseable; else `null`. |
-| `processCard(anchor, config, counters)` | Validates `jk`, fetches JD, calls `ingestJob` with Indeed fields (including **`post_datetime`** from **`parseIndeedPostDate`**), updates counters. |
+| `processCard(anchor, config, counters)` | Validates `jk`, fetches JD. **`easy_apply`** is determined only by **`detectIndeedEasyApply()`** (sync DOM on the job view: Indeed apply widget / buttons — no async **`executeScript`** from this file). **`apply_url`** is **`null`** when easy apply, else the viewjob URL. Calls `ingestJob` with Indeed fields (including **`post_datetime`** from **`parseIndeedPostDate`**), updates counters. |
 
 ### `content/indeed/page.js`
 
@@ -274,7 +272,8 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `init()` | Same control flow as LinkedIn: wait for scan, session check, `runSinglePage`, `scanComplete`. |
+| `ensureIndeedRunLog(config)` | If **`config.runId`** is missing, **POST**s **`/extension/run-log/start`** using **`backendUrl` / `authToken`** from storage (Indeed-shaped body), persists **`runId`** on **`scanConfig`**. Ensures a run log exists **before** overlay / card processing when the background did not attach an id. |
+| `init()` | After **`scanConfig`** exists, calls **`ensureIndeedRunLog`** first (first backend touch for logging). Then: **`tabId`** guard, overlay, **`runSinglePage`**, **`scanComplete`**. Same high-level control flow as LinkedIn otherwise. |
 
 ### `content/glassdoor/parse.js`
 
@@ -286,20 +285,20 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `fetchGlassdoorJD(jobUrl, jl, scanDelay)` | **GET** the job-listing **`jobUrl`** (`credentials: include`, **20s** abort). Parses JD from **`__NEXT_DATA__`**, JSON-LD, or DOM. Reads JSON-LD **`JobPosting.directApply`** for **`easy_apply`**. **429/503** → **`{ rateLimited: true, easy_apply: false }`**; phantom → **`{ phantom: true }`**; success → **`{ jd, easy_apply }`**. |
+| `fetchGlassdoorJD(jobUrl, jl)` | **GET** the job-listing **`jobUrl`** (`credentials: include`, **20s** abort). Parses JD from **`__NEXT_DATA__`**, JSON-LD, or DOM. Reads JSON-LD **`JobPosting.directApply`** for **`easy_apply`**. **429/503** → **`{ rateLimited: true, easy_apply: false }`**; phantom → **`{ phantom: true }`**; success → **`{ jd, easy_apply }`**. |
 
 ### `content/glassdoor/process.js`
 
 | Function | Description |
 | --- | --- |
 | `pushScanError(counters, entry)` | Caps **`errors`** at **200** for run logs (same pattern as LinkedIn/Indeed). |
-| `processGlassdoorCard(cardEl, config, counters, settings)` | `INGEST_JOB` with **`{ job }`** (not `ingestJob()` helper). Ingest uses **`post_datetime: null`**. Handles phantom (stale_skipped), rateLimited, jd_failed, duplicates. |
+| `processGlassdoorCard(cardEl, config, counters)` | `INGEST_JOB` with **`{ job }`** (not `ingestJob()` helper). Ingest uses **`post_datetime: null`**. When **`easy_apply`** is true, **`apply_url`** is **`null`** (listing URL stays on **`job_url`**). Handles phantom (stale_skipped), rateLimited, jd_failed, duplicates. |
 
 ### `content/glassdoor/page.js`
 
 | Function | Description |
 | --- | --- |
-| `scanGlassdoorPage(config, settings, runId)` | Finds cards, loops with **`CHECK_STOP`**, **`processGlassdoorCard`**, early stop on consecutive duplicates, optional rate-limit cooldowns. |
+| `scanGlassdoorPage(config, runId)` | Finds cards, loops with **`CHECK_STOP`**, **`processGlassdoorCard`**, inter-card pacing (**`interCardPacingMs`**), early stop on consecutive duplicates, optional rate-limit cooldowns. |
 
 ### `content/glassdoor/init.js`
 
@@ -320,7 +319,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | `clearWarning()` | Clears session error from storage and hides banner. |
 | `loadSettings()` | Loads storage into fields and resumes polling if a scan is active. |
 | `loadConfig()` | GETs `/config` and fills **only** the fields listed in `CONFIG_FIELDS` in `popup.js` (keyword, location, `f_tpr_bound`, experience/job-type/remote filters, `salary_min`). **There are no popup inputs for `website`, `indeed_*`, or nested `glassdoor`** — configure those via the **web app Config page** or PUT `/config` directly; the service worker still reads the full config from the backend when a scan starts. |
-| `saveSettings()` | Writes `backendUrl`, `authToken`, `scanDelay` to storage and PUTs the same **subset** of config keys as `loadConfig()`. |
+| `saveSettings()` | Writes `backendUrl` and `authToken` to storage and PUTs the same **subset** of config keys as `loadConfig()`. |
 | `startScan()` | Hides scan button, sends `MANUAL_SCAN`, starts progress polling. |
 | `stopScan()` | Sends `STOP_SCAN` and updates UI. |
 | `startPolling()` | `setInterval` for `pollProgress`. |
@@ -333,9 +332,9 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 1. **Scan start** — either:
    - **Web app:** user clicks **Scan LinkedIn**, **Scan Indeed**, or **Scan Glassdoor** → backend **`POST /extension/trigger-scan`** with `{"website":"linkedin"|"indeed"|"glassdoor"}` → on the next poll, **`pollForScanTrigger()`** receives `pending` and calls `handleManualScan({ websiteOverride })`, **or**
    - **Popup:** user clicks **Scan Now** → `popup.js` sends `{ type: "MANUAL_SCAN" }` via `chrome.runtime.sendMessage` → **`handleManualScan()`** with no override (site comes from `config.website`).
-2. `background/scan_manual.js` `handleManualScan()` clears `scanPageState`, resets backend page counters, GETs config, runs `computeFtpr` for LinkedIn, POSTs run log start, builds the search URL, then opens a **popup window** (`chrome.windows.create`) and stores `scanConfig` (including **`tabId`**) / `liveProgress`, arms the **90-minute** safety timeout. URL: **`buildSearchUrl`** / **`buildIndeedSearchUrl`** / **`buildGlassdoorSearchUrl`** (LinkedIn URL includes `f_SB2` via `salaryToLinkedInFilter` when `salary_min` maps to a bracket).
-3. **LinkedIn:** `init()` → `runSinglePage()` → job ids from **`data-occludable-job-id`** + Voyager + **`ingestJob`**. **Indeed:** loops **`processCard()`** over result cards. **Glassdoor:** `glassdoorMain()` waits for **`scanInProgress`** + **`scanConfig.website === "glassdoor"`**, then **`scanGlassdoorPage()`** → **`processGlassdoorCard()`** (single SERP page; completion via **`scanComplete`** like other sites).
-4. **LinkedIn:** `fetchJDViaVoyager()` → Voyager APIs → `ingestJob()` sends `{ type: "INGEST_JOB", job }`. **Indeed:** `fetchIndeedJD()` in **`rate_strategy.js`** → same `ingestJob()` path. **Glassdoor:** `fetchGlassdoorJD()` (job-listing HTML + **`__NEXT_DATA__`**) → **`processGlassdoorCard`** sends `{ type: "INGEST_JOB", job }` directly (does not use `shared/messaging.js`).
+2. `background/scan_manual.js` `handleManualScan()` clears `scanPageState`, **PUT**s **`stop_requested: false`** then page counters, GETs config, runs `computeFtpr` for LinkedIn, POSTs run log start, builds the search URL, then opens a **popup window** (`chrome.windows.create`) and stores `scanConfig` (including **`tabId`**) / `liveProgress`, arms the **90-minute** safety timeout. URL: **`buildSearchUrl`** / **`buildIndeedSearchUrl`** / **`buildGlassdoorSearchUrl`**.
+3. **LinkedIn:** `init()` → `runSinglePage()` → job ids from **`data-occludable-job-id`** + Voyager + **`ingestJob`**. **Indeed:** `init()` runs **`ensureIndeedRunLog`** when needed, then loops **`processCard()`** over result cards. **Glassdoor:** `glassdoorMain()` waits for **`scanInProgress`** + **`scanConfig.website === "glassdoor"`**, then **`scanGlassdoorPage()`** → **`processGlassdoorCard()`** (single SERP page; completion via **`scanComplete`** like other sites).
+4. **LinkedIn:** `fetchJDViaVoyager()` → Voyager APIs → `ingestJob()` sends `{ type: "INGEST_JOB", job }`. **Indeed:** `fetchIndeedJD()` in **`rate_strategy.js`** (GraphQL + **10s** abort) → same `ingestJob()` path. **Glassdoor:** `fetchGlassdoorJD()` (job-listing HTML + **`__NEXT_DATA__`**) → **`processGlassdoorCard`** sends `{ type: "INGEST_JOB", job }` directly (does not use `shared/messaging.js`).
 5. `background/ingest.js` `handleIngest()` POSTs to `/jobs/ingest`; the backend persists the job.
 6. **`post_datetime` on ingest:** **LinkedIn** — card `<time datetime>` and/or Voyager **`listedAt`** (see `content/linkedin/process.js`). **Indeed** — **`parseIndeedPostDate`** from card snippet text when it matches posted/active patterns (`content/indeed/process.js`). **Glassdoor** — **`null`** (listing age is not sent). The web app Jobs page may show “Posted” / “Scraped” using **`post_datetime`** and **`created_at`** for **LinkedIn** jobs only; other sites omit that row in the UI.
 7. The web app (or other client) loads jobs via the backend API (e.g. GET `/jobs`); the extension popup only mirrors **live** counters from `chrome.storage.local` (`liveProgress`), not the full job list.
@@ -374,11 +373,13 @@ Internal scan coordination uses **`chrome.storage.local`**. Keys include:
 | `scanTimeoutId` | String id for the 90-minute safety `setTimeout` (cleared when `scanComplete` fires). |
 | `lastRunSummary` | Last completed run stats for the popup. |
 | `lastSessionError` | Session error key from content scripts for the warning banner. |
-| `backendUrl`, `authToken`, `scanDelay` | Connection settings (`settings.js`, popup). |
+| `backendUrl`, `authToken` | Connection settings (`settings.js`, popup). |
 
 Other keys may appear for short periods during saves or errors.
 
 ## Troubleshooting
+
+**Indeed scan hangs or long stalls:** The Indeed GraphQL JD fetch uses a **10s** abort; slow or stuck network calls return **`phantom`** instead of blocking indefinitely. **Easy apply** is detected with synchronous DOM checks in **`process.js`** only (no **`executeScript`** from the content script). The **`GET_MAIN_WORLD_VALUE`** path (background **`executeScript`**) exists solely to read **`oneGraphApiKey`** for GraphQL — if that fails, **`fetchIndeedJD`** returns **`null`** and the card is skipped as JD failed.
 
 **JD / ingest failures on LinkedIn with mysterious “Internal Server Error” plain-text responses:** Some browser extensions (notably **Adobe Acrobat**) inject into LinkedIn and override `window.fetch`. Content scripts must **never** `fetch` the JHA backend directly; job ingest uses **`INGEST_JOB`** → **`background/ingest.js`** only. If you still see odd behavior, open `chrome://extensions` → Adobe Acrobat → **Details** → **Site access** → restrict or remove `linkedin.com`, or disable that extension while scanning.
 

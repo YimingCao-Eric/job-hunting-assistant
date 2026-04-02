@@ -4,9 +4,9 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function scanDelayMs(setting) {
-  const ranges = { fast: [500, 1000], normal: [1000, 2000], slow: [3000, 5000] };
-  const [min, max] = ranges[setting] || ranges.normal;
+function interCardPacingMs() {
+  const min = 1000;
+  const max = 2000;
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -14,7 +14,7 @@ function cardJobId(el) {
   return el.getAttribute("data-jobid") || el.getAttribute("data-id");
 }
 
-async function scanGlassdoorPage(config, settings, runId) {
+async function scanGlassdoorPage(config, runId) {
   const counters = {
     scraped: 0,
     new_jobs: 0,
@@ -22,11 +22,8 @@ async function scanGlassdoorPage(config, settings, runId) {
     stale_skipped: 0,
     jd_failed: 0,
     pages: 0,
-    early_stop: false,
     errors: [],
   };
-
-  const EARLY_STOP_THRESHOLD = 5;
   const SHOW_MORE_MIN_WAIT_MS = 1500;
   const SHOW_MORE_POLL_MS = 500;
   const SHOW_MORE_MAX_WAIT_MS = 12000;
@@ -55,7 +52,6 @@ async function scanGlassdoorPage(config, settings, runId) {
 
     console.log(`[JHA-Glassdoor] found ${cards.length} new cards on page ${pageNum}`);
 
-    let consecutiveExisting = 0;
     let stopRequested = false;
 
     for (const cardEl of cards) {
@@ -69,11 +65,10 @@ async function scanGlassdoorPage(config, settings, runId) {
       if (stopFlag?.stop) {
         console.log("[JHA-Glassdoor] stop requested");
         stopRequested = true;
-        counters.early_stop = true;
         break;
       }
 
-      const result = await processGlassdoorCard(cardEl, config, counters, settings);
+      const result = await processGlassdoorCard(cardEl, config, counters);
 
       if (result?.rateLimited) {
         console.warn("[JHA-Glassdoor] rate limited — waiting 60s");
@@ -81,26 +76,14 @@ async function scanGlassdoorPage(config, settings, runId) {
         continue;
       }
 
-      if (result?.existing) {
-        consecutiveExisting++;
-        if (consecutiveExisting >= EARLY_STOP_THRESHOLD) {
-          console.log("[JHA-Glassdoor] early stop — 5 consecutive existing");
-          stopRequested = true;
-          counters.early_stop = true;
-          break;
-        }
-      } else {
-        consecutiveExisting = 0;
-      }
-
-      await sleep(scanDelayMs(settings?.scanDelay || "normal"));
+      await sleep(interCardPacingMs());
     }
 
     counters.pages = pageNum;
 
     /* Inner `break` only exits the `for`; this exits the `while` before any "Show more" click. */
     if (stopRequested) {
-      console.log("[JHA-Glassdoor] halting pagination — early stop or user stop");
+      console.log("[JHA-Glassdoor] halting pagination — user stop");
       break;
     }
 

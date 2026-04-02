@@ -26,7 +26,6 @@ async function runManualGlassdoorScan(config) {
           stale_skipped: 0,
           jd_failed: 0,
           pages_scanned: 0,
-          early_stop: false,
           error: "not_a_job_search_page",
         },
         completedAt: Date.now(),
@@ -34,13 +33,6 @@ async function runManualGlassdoorScan(config) {
     });
     return;
   }
-
-  const settings = await new Promise((resolve) =>
-    chrome.storage.local.get(
-      ["scanDelay", "backendUrl", "authToken"],
-      resolve
-    )
-  );
 
   const tabResult = await new Promise((resolve) =>
     chrome.runtime.sendMessage({ type: "GET_TAB_ID" }, resolve)
@@ -50,7 +42,7 @@ async function runManualGlassdoorScan(config) {
   console.log("[JHA-Glassdoor] manual scan starting", { url, runId: config.runId });
 
   try {
-    const counters = await scanGlassdoorPage(config, settings, config.runId);
+    const counters = await scanGlassdoorPage(config, config.runId);
 
     await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
     await chrome.storage.local.set({
@@ -64,7 +56,6 @@ async function runManualGlassdoorScan(config) {
           stale_skipped: counters.stale_skipped,
           jd_failed: counters.jd_failed,
           pages_scanned: counters.pages ?? 0,
-          early_stop: !!counters.early_stop,
           errors: counters.errors || [],
         },
         runId: config.runId,
@@ -86,7 +77,6 @@ async function runManualGlassdoorScan(config) {
           stale_skipped: 0,
           jd_failed: 0,
           pages_scanned: 0,
-          early_stop: false,
           errors: [],
           error: e.message,
         },
@@ -112,7 +102,7 @@ async function runAutoGlassdoorScan() {
 
   const settings = await new Promise((resolve) =>
     chrome.storage.local.get(
-      ["autoScan", "scanDelay", "backendUrl", "authToken", "lastGlassdoorScanTime"],
+      ["autoScan", "lastGlassdoorScanTime"],
       resolve
     )
   );
@@ -158,7 +148,7 @@ async function runAutoGlassdoorScan() {
 
   console.log("[JHA-Glassdoor] starting auto-scan", { url, runId });
 
-  const counters = await scanGlassdoorPage(config, settings, runId);
+  const counters = await scanGlassdoorPage(config, runId);
 
   console.log("[JHA-Glassdoor] auto-scan complete", counters);
 

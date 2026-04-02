@@ -9,14 +9,34 @@ async function handleManualScan(options = {}) {
   if (scanInProgress) return;
 
   const { backendUrl, authToken } = await getSettings();
-  await fetch(`${backendUrl}/extension/state`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${authToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ current_page: 1, today_searches: 0 }),
-  }).catch(() => {});
+  try {
+    await fetch(`${backendUrl}/extension/state`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ stop_requested: false }),
+    });
+  } catch (e) {
+    console.warn("[JHA] Could not clear stop_requested:", e.message);
+  }
+
+  try {
+    await fetch(`${backendUrl}/extension/state`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        current_page: 1,
+        today_searches: 0,
+      }),
+    });
+  } catch (e) {
+    console.warn("[JHA] scan_manual: could not reset extension state:", e.message);
+  }
 
   const config = await fetchConfig();
   if (!config) {

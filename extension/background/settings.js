@@ -8,11 +8,9 @@ async function getSettings() {
   settingsCache = await chrome.storage.local.get([
     "backendUrl",
     "authToken",
-    "scanDelay",
   ]);
   if (!settingsCache.backendUrl) settingsCache.backendUrl = "http://localhost:8000";
   if (!settingsCache.authToken) settingsCache.authToken = "dev-token";
-  if (!settingsCache.scanDelay) settingsCache.scanDelay = "normal";
   settingsCacheTime = Date.now();
   return settingsCache;
 }

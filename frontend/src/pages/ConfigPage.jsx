@@ -34,7 +34,6 @@ const DEFAULTS = {
   f_job_type: '',
   f_remote: '',
   salary_min: 0,
-  scan_delay: 'normal',
   general_date_posted: 1,
   general_internship_only: false,
   general_remote_only: false,
@@ -106,10 +105,12 @@ function buildPreviewUrls(config) {
   if (config.indeed_remotejob === true || config.general_remote_only === true) {
     iq.set('remotejob', '1')
   }
-  const ij = config.general_internship_only
-    ? 'internship'
-    : String(config.indeed_jt ?? '').trim()
-  if (ij) iq.set('jt', ij)
+  if (config.general_internship_only) {
+    iq.set('jt', 'internship')
+  } else {
+    const ij = String(config.indeed_jt ?? '').trim()
+    if (ij) iq.set('jt', ij)
+  }
   const ex = String(config.indeed_explvl ?? '').trim()
   if (ex) iq.set('explvl', ex)
   const lang = String(config.indeed_lang ?? '').trim()
@@ -154,7 +155,7 @@ export default function ConfigPage() {
           indeed_location: nullToEmpty(data.indeed_location),
           indeed_fromage: data.indeed_fromage ?? 1,
           indeed_remotejob: data.indeed_remotejob === true,
-          indeed_jt: nullToEmpty(data.indeed_jt),
+          indeed_jt: nullToEmpty(data.indeed_jt).split(',')[0].trim(),
           indeed_explvl: nullToEmpty(data.indeed_explvl),
           indeed_lang: nullToEmpty(data.indeed_lang),
           keyword: nullToEmpty(data.keyword),
@@ -164,7 +165,6 @@ export default function ConfigPage() {
           f_job_type: nullToEmpty(data.f_job_type),
           f_remote: nullToEmpty(data.f_remote),
           salary_min: data.salary_min ?? 0,
-          scan_delay: data.scan_delay || 'normal',
           general_date_posted: data.general_date_posted ?? 1,
           general_internship_only: data.general_internship_only === true,
           general_remote_only: data.general_remote_only === true,
@@ -179,7 +179,10 @@ export default function ConfigPage() {
             minSalary: g.minSalary != null ? g.minSalary : null,
             maxSalary: g.maxSalary != null ? g.maxSalary : null,
             minRating: g.minRating != null ? g.minRating : null,
-            jobType: g.jobType != null ? g.jobType : null,
+            jobType:
+              g.jobType != null
+                ? String(g.jobType).split(',')[0].trim() || null
+                : null,
             seniorityType: (() => {
               const stored = g.seniorityType != null ? g.seniorityType : null
               if (!data.general_internship_only && stored === 'internship') {
@@ -283,7 +286,6 @@ export default function ConfigPage() {
         f_job_type: emptyToNull(config.f_job_type),
         f_remote: emptyToNull(config.f_remote),
         salary_min: parseInt(config.salary_min, 10) || 0,
-        scan_delay: config.scan_delay,
         glassdoor: {
           keyword: gd_keyword_final,
           location: gd_location_final,
@@ -611,11 +613,13 @@ export default function ConfigPage() {
                         onChange={e => set('indeed_jt', e.target.value)}
                       >
                         <option value="">Any</option>
-                        <option value="fulltime">fulltime</option>
-                        <option value="parttime">parttime</option>
-                        <option value="contract">contract</option>
-                        <option value="internship">internship</option>
-                        <option value="temporary">temporary</option>
+                        <option value="fulltime">Full-time</option>
+                        <option value="permanent">Permanent</option>
+                        <option value="parttime">Part-time</option>
+                        <option value="contract">Contract</option>
+                        <option value="temporary">Temporary</option>
+                        <option value="freelance">Freelance</option>
+                        <option value="internship">Internship / Co-op</option>
                       </select>
                     </div>
                     <div className={s.field}>
@@ -717,9 +721,12 @@ export default function ConfigPage() {
                       >
                         <option value="">Any</option>
                         <option value="fulltime">Full-time</option>
-                        <option value="contract">Contract</option>
                         <option value="permanent">Permanent</option>
+                        <option value="contract">Contract</option>
+                        <option value="parttime">Part-time</option>
                         <option value="temporary">Temporary</option>
+                        <option value="freelance">Freelance</option>
+                        <option value="internship">Internship / Co-op</option>
                       </select>
                     </div>
                     <div className={s.field}>

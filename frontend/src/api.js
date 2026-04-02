@@ -17,12 +17,16 @@ export const api = {
     }).then(r => r.json()),
 
   // Jobs
-  getJobs: (params = {}) => {
+  getJobs: async (params = {}) => {
     const cleanParams = Object.fromEntries(
       Object.entries(params).filter(([_, v]) => v !== null && v !== undefined && v !== '')
     );
     const query = new URLSearchParams(cleanParams).toString();
-    return fetch(`${BASE_URL}/jobs?${query}`, { headers: headers() }).then(r => r.json());
+    const data = await fetch(`${BASE_URL}/jobs?${query}`, { headers: headers() }).then(r => r.json());
+    if (Array.isArray(data)) {
+      return { items: data, total: data.length, limit: data.length, offset: 0 };
+    }
+    return data;
   },
 
   // Scan trigger
@@ -55,4 +59,7 @@ export const api = {
   getRunLogs: (limit = 1) =>
     fetch(`${BASE_URL}/extension/run-log?limit=${limit}`, { headers: headers() })
       .then(r => r.json()),
+
+  getExtensionState: () =>
+    fetch(`${BASE_URL}/extension/state`, { headers: headers() }).then(r => r.json()),
 };

@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import text, update
 
 from core.database import AsyncSessionLocal, run_migrations
+from models.extension_run_log import ExtensionRunLog
 from routers import config as config_router
 from routers import extension as extension_router
 from routers import jobs as jobs_router
@@ -15,15 +17,22 @@ async def lifespan(_app: FastAPI):
     await run_migrations()
 
     async with AsyncSessionLocal() as session:
-        await session.execute(
-            text(
-                "UPDATE extension_run_logs "
-                "SET status = 'crashed' "
-                "WHERE status = 'running' "
-                "AND started_at < now() - interval '30 minutes'"
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        result = await session.execute(
+            update(ExtensionRunLog)
+            .where(
+                ExtensionRunLog.status == "running",
+                ExtensionRunLog.started_at < cutoff,
+            )
+            .values(
+                status="failed",
+                completed_at=datetime.now(timezone.utc),
+                session_error="Auto-cleaned: stale on startup",
             )
         )
         await session.commit()
+        if result.rowcount:
+            print(f"[JHA] Cleaned {result.rowcount} stale run(s) on startup")
 
     yield
 

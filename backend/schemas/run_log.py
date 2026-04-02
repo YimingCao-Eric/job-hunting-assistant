@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
+from typing import Optional
 
 
 class RunLogCreate(BaseModel):
@@ -20,7 +21,6 @@ class RunLogUpdate(BaseModel):
     existing: int | None = None
     stale_skipped: int | None = None
     jd_failed: int | None = None
-    early_stop: bool | None = None
     session_error: str | None = None
     error_message: str | None = None
     errors: list | None = None
@@ -40,7 +40,7 @@ class RunLogRead(BaseModel):
     existing: int
     stale_skipped: int
     jd_failed: int
-    early_stop: bool
+    early_stop: Optional[bool] = None
     session_error: str | None = None
     search_keyword: str | None = None
     search_location: str | None = None

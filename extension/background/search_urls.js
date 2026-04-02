@@ -1,18 +1,4 @@
-/* ── Salary bracket & search URL builders ───────────────────────────────── */
-
-function salaryToLinkedInFilter(salaryMin) {
-  if (!salaryMin || salaryMin <= 0) return null;
-  if (salaryMin < 40000) return null;
-  if (salaryMin < 60000) return "1";
-  if (salaryMin < 80000) return "2";
-  if (salaryMin < 100000) return "3";
-  if (salaryMin < 120000) return "4";
-  if (salaryMin < 140000) return "5";
-  if (salaryMin < 160000) return "6";
-  if (salaryMin < 180000) return "7";
-  if (salaryMin < 200000) return "8";
-  return "9";
-}
+/* ── Search URL builders ─────────────────────────────────────────────── */
 
 function buildSearchUrl(config, f_tpr, startOffset = 0) {
   const params = new URLSearchParams({
@@ -30,8 +16,6 @@ function buildSearchUrl(config, f_tpr, startOffset = 0) {
   if (config.f_experience) params.set("f_E", config.f_experience);
   if (config.f_job_type) params.set("f_JT", config.f_job_type);
   if (config.f_remote) params.set("f_WT", config.f_remote);
-  const salaryBracket = salaryToLinkedInFilter(config.salary_min);
-  if (salaryBracket) params.set("f_SB2", salaryBracket);
   if (startOffset > 0) params.set("start", startOffset);
   return `https://www.linkedin.com/jobs/search?${params.toString()}`;
 }
@@ -43,7 +27,10 @@ function buildIndeedSearchUrl(config, startOffset = 0) {
   params.set("sort", "relevance");
   if (config.indeed_fromage) params.set("fromage", String(config.indeed_fromage));
   if (config.indeed_remotejob) params.set("remotejob", "1");
-  if (config.indeed_jt) params.set("jt", config.indeed_jt);
+  const ij = config.general_internship_only
+    ? "internship"
+    : (config.indeed_jt || "").trim();
+  if (ij) params.set("jt", ij);
   if (config.indeed_explvl) params.set("explvl", config.indeed_explvl);
   if (config.indeed_lang) params.set("lang", config.indeed_lang);
   if (startOffset > 0) params.set("start", String(startOffset));
@@ -68,7 +55,7 @@ function buildGlassdoorSearchUrl(config) {
   if (g.minSalary != null)       params.set("minSalary",       g.minSalary);
   if (g.maxSalary != null)       params.set("maxSalary",       g.maxSalary);
   if (g.minRating != null)       params.set("minRating",       g.minRating);
-  if (g.jobType != null)         params.set("jobType",         g.jobType);
+  if (g.jobType) params.set("jobType", g.jobType);
   if (g.seniorityType != null)   params.set("seniorityType",   g.seniorityType);
   params.set("sortBy", "date_desc");
 

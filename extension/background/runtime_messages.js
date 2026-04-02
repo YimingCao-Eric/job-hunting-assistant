@@ -202,7 +202,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             existing: message.counters?.existing || 0,
             stale_skipped: message.counters?.stale_skipped || 0,
             jd_failed: message.counters?.jd_failed || 0,
-            early_stop: !!message.counters?.early_stop,
             errors: message.counters?.errors || [],
           }),
         });

@@ -1,13 +1,13 @@
-/* ── Warning banner ──────────────────────────────────────── */
-
-.warningBanner {
-  background: #fef3c7;
-  border: 1px solid #f59e0b;
-  border-radius: 8px;
-  padding: 12px 16px;
-  font-size: 13px;
-  color: #92400e;
-  margin-bottom: 16px;
+.promotedBadge {
+  display: inline-block;
+  background: #fff0e0;
+  color: #b36200;
+  border: 1px solid #f5a623;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 5px;
+  letter-spacing: 0.3px;
 }
 
 /* ── Scan panel ───────────────────────────────────────────── */
@@ -76,6 +76,31 @@
   cursor: not-allowed;
 }
 
+.scanAllBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  background: #1a1a2e;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.scanAllBtn:hover:not(:disabled) {
+  background: #16213e;
+}
+
+.scanBtnDisabled,
+.scanAllBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .stopBtn {
   background: #dc2626;
   color: #fff;
@@ -100,12 +125,62 @@
   color: #555;
 }
 
-.scanTimer {
+.scanProgressWrap {
+  margin: 6px 0 4px;
+  width: 100%;
+}
+
+.scanProgressTrack {
+  width: 100%;
+  height: 6px;
+  background: #dce8f8;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.scanProgressFill {
+  height: 100%;
+  background: #0a66c2;
+  border-radius: 3px;
+  transition: width 1.2s ease;
+  min-width: 0;
+}
+
+.scanProgressMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.scanProgressPct {
   font-size: 13px;
+  font-weight: 700;
+  color: #0a66c2;
+  min-width: 36px;
+}
+
+.scanProgressTime {
+  font-size: 12px;
   color: #555;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-  margin-left: 4px;
+}
+
+.scanProgressCount {
+  font-size: 11px;
+  color: #888;
+}
+
+.scanProgressDone {
+  font-size: 12px;
+  color: #057642;
+  font-weight: 600;
+}
+
+.scanProgressSite {
+  font-size: 11px;
+  color: #0a66c2;
+  font-style: italic;
 }
 
 .pulseDot {
@@ -132,81 +207,6 @@
   color: #999;
   width: 100%;
   margin-top: 2px;
-}
-
-/* ── Scan history (collapsible) ───────────────────────────── */
-
-.scanHistory {
-  margin-bottom: 1.25rem;
-}
-
-.scanHistoryToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
-  background: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  color: #333;
-  cursor: pointer;
-}
-
-.scanHistoryToggle:hover {
-  background: #fafafa;
-}
-
-.scanHistoryChevron {
-  font-size: 10px;
-  color: #666;
-}
-
-.scanHistoryList {
-  margin-top: 10px;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #fff;
-}
-
-.scanHistoryEmpty {
-  padding: 12px 14px;
-  font-size: 13px;
-  color: #888;
-}
-
-.scanHistoryRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px 16px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #f0f0f0;
-  font-size: 12px;
-  color: #333;
-  text-decoration: none;
-  transition: background 0.12s;
-}
-
-.scanHistoryRow:last-child {
-  border-bottom: none;
-}
-
-.scanHistoryRow:hover {
-  background: #f8f8f8;
-}
-
-.scanHistorySite {
-  font-weight: 600;
-  flex-shrink: 0;
-}
-
-.scanHistoryMeta {
-  color: #555;
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 /* ── Tab bar ──────────────────────────────────────────────── */
@@ -326,12 +326,18 @@
   color: #999;
 }
 
-/* ── Grid ─────────────────────────────────────────────────── */
+/* ── Grid (2×5) ───────────────────────────────────────────── */
 
-.grid {
+.jobGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .jobGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Job card ─────────────────────────────────────────────── */
@@ -347,8 +353,67 @@
   flex-direction: column;
 }
 
-.card:has(.websiteBadge) .cardTitle {
-  padding-right: 88px;
+.sourceLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 22px;
+}
+
+.sourceLine .websiteBadge {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 8px;
+  min-height: 22px;
+}
+
+.badgeRow .websiteBadge {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
+.remoteBadge {
+  display: inline-block;
+  background: #e8f4fd;
+  color: #0a66c2;
+  border: 1px solid #b3d4f0;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 5px;
+}
+
+.internBadge {
+  display: inline-block;
+  background: #f0faf0;
+  color: #1a7a1a;
+  border: 1px solid #a8d5a8;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 5px;
+}
+
+.easyApplyBadge {
+  display: inline-block;
+  background: #f0fff4;
+  color: #057642;
+  border: 1px solid #a8d5b8;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 5px;
 }
 
 .card:hover {
@@ -379,6 +444,10 @@
   margin-top: 6px;
 }
 
+.location {
+  color: inherit;
+}
+
 .cardTime {
   font-size: 11px;
   color: #aaa;
@@ -394,7 +463,6 @@
   font-size: 12px;
   color: #888;
   margin-top: 8px;
-  text-align: right;
   line-height: 1.35;
 }
 
@@ -469,12 +537,112 @@
   background: #f0f0f0;
 }
 
+/* ── Filter bar (tabs + scraped) ─────────────────────────── */
+
+.filterBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px 24px;
+  margin-bottom: 16px;
+}
+
+.filterGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filterLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.filterSelect {
+  padding: 6px 10px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  min-width: 140px;
+}
+
+.filterDateInput {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #333;
+  cursor: pointer;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 24px;
+  padding-bottom: 24px;
+}
+
+.paginationNumbers {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.pageBtn {
+  padding: 6px 14px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.pageBtnActive {
+  background: #0a66c2;
+  color: #fff;
+  border-color: #0a66c2;
+  font-weight: 600;
+}
+
+.pageEllipsis {
+  padding: 0 4px;
+  color: #999;
+  font-size: 13px;
+  align-self: center;
+}
+
+.pageBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.paginationMeta {
+  text-align: center;
+  font-size: 13px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.pageInfo {
+  font-size: 13px;
+  color: #666;
+}
+
 /* ── Website filter tabs ─────────────────────────────────── */
 
 .filterTabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 16px;
 }
 
 .filterTab {
@@ -514,4 +682,53 @@
 
 .badgeGlassdoor {
   background: #0caa41;
+}
+
+.applyRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+  margin-bottom: 24px;
+}
+
+.applyManualBtn {
+  display: inline-block;
+  padding: 8px 20px;
+  background: #0a66c2;
+  color: #fff;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.applyManualBtn:hover {
+  background: #004182;
+}
+
+.autoApplyBtn {
+  display: inline-block;
+  padding: 8px 20px;
+  background: #e0e0e0;
+  color: #aaa;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  cursor: not-allowed;
+}
+
+.applyNote {
+  font-size: 11px;
+  color: #999;
+  margin-top: 6px;
+}
+
+.jobDescription {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #333;
 }

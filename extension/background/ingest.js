@@ -20,6 +20,7 @@ async function handleIngest(job) {
     },
     body: JSON.stringify(safeJob),
   });
+
   const text = await res.text();
   try {
     return JSON.parse(text);
@@ -29,6 +30,23 @@ async function handleIngest(job) {
       res.status,
       text.slice(0, 200)
     );
+    const errMsg = `Backend ${res.status}: ${text.slice(0, 100)}`;
+    (async () => {
+      await chrome.storage.local.set({ lastSessionError: errMsg });
+      const { backendUrl, authToken } = await getSettings();
+      try {
+        await fetch(`${backendUrl}/extension/session-error`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ error: errMsg }),
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
     return null;
   }
 }

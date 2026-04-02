@@ -29,7 +29,6 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
         existing: summary.existing,
         stale_skipped: summary.stale_skipped,
         jd_failed: summary.jd_failed,
-        early_stop: summary.early_stop,
         errors: summary.errors || [],
       }),
     });

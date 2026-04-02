@@ -6,7 +6,7 @@ function pushScanError(counters, entry) {
   counters.errors.push(entry);
 }
 
-async function processGlassdoorCard(cardEl, config, counters, settings) {
+async function processGlassdoorCard(cardEl, config, counters) {
   counters.scraped++;
 
   const cardData = parseGlassdoorCard(cardEl);
@@ -16,7 +16,7 @@ async function processGlassdoorCard(cardEl, config, counters, settings) {
     return { skipped: true };
   }
 
-  const jdResult = await fetchGlassdoorJD(cardData.jobUrl, cardData.jl, config.scan_delay || "normal");
+  const jdResult = await fetchGlassdoorJD(cardData.jobUrl, cardData.jl);
 
   if (jdResult && jdResult.phantom) {
     counters.stale_skipped++;
@@ -39,15 +39,22 @@ async function processGlassdoorCard(cardEl, config, counters, settings) {
     return { rateLimited: true };
   }
 
+  const easyApply = jdResult?.easy_apply === true;
+  const jobUrl = cardData.jobUrl || null;
+
   const job = {
     website:         "glassdoor",
     job_title:       cardData.jobTitle  || "Unknown",
     company:         cardData.company   || "Unknown",
-    location:        cardData.location  || config.glassdoor?.location || "Canada",
+    location:
+      jdResult.location ||
+      cardData.location ||
+      config.glassdoor?.location ||
+      "Canada",
     job_url:         cardData.jobUrl,
-    apply_url:       cardData.jobUrl,
+    apply_url:       easyApply ? null : jobUrl,
     job_description: jdResult.jd,
-    easy_apply:      jdResult.easy_apply ?? false,
+    easy_apply:      easyApply,
     post_datetime:   null,
     search_filters: {
       website: "glassdoor",

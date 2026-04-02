@@ -105,7 +105,6 @@ Search parameters live in `config.json` (path set by `CONFIG_PATH` in Docker). E
 | `f_job_type` | LinkedIn job type codes |
 | `f_remote` | LinkedIn remote / workplace codes |
 | `salary_min` | Minimum salary (LinkedIn `f_SB2`); `0` = no filter |
-| `scan_delay` | `fast` / `normal` / `slow` — delay between cards |
 | `single_page_mode` | If true, scan stops after the first results page (testing) |
 | `indeed_keyword` | Indeed query `q` |
 | `indeed_location` | Indeed query `l` |
@@ -154,7 +153,7 @@ All endpoints except `/health` expect **`Authorization: Bearer <token>`** (e.g. 
 
 ### `GET /jobs` response shape
 
-Each job includes: `id`, `website`, `job_title`, `company`, `location`, `job_description`, `job_url`, `apply_url`, `easy_apply`, `post_datetime`, `search_filters`, `raw_description_hash`, `ingest_source`, `scan_run_id`, `original_job_id` (set when a **content-duplicate** row is inserted — points at the earlier job with the same description hash; `null` for URL duplicates and new unique rows), `dismissed`, `skip_reason`, `created_at`, `updated_at`, `match_level`, `match_reason`, `fit_score`, `req_coverage`, `confidence`, `skipped_reason`, `required_skills`, `nice_to_have_skills`, `critical_skills`, `extracted_yoe`, `salary_min_extracted`, `salary_max_extracted`, `remote_type`, `seniority_level`, `job_type`, `jd_incomplete`, `matched_at`.
+Each job includes: `id`, `website`, `job_title`, `company`, `location`, `job_description`, `job_url`, `apply_url`, `easy_apply`, `post_datetime`, `search_filters`, `raw_description_hash`, `ingest_source`, `scan_run_id`, `original_job_id` (set when a **content-duplicate** row is inserted — points at the earlier job with the same description hash; `null` for URL duplicates and new unique rows), `dismissed`, `skip_reason`, `created_at`, `updated_at`, `match_level`, `match_reason`, `fit_score`, `req_coverage`, `confidence`, `match_skip_reason`, `required_skills`, `nice_to_have_skills`, `critical_skills`, `extracted_yoe`, `salary_min_extracted`, `salary_max_extracted`, `remote_type`, `seniority_level`, `job_type`, `jd_incomplete`, `matched_at`.
 
 ### `GET /extension/run-log` list item shape
 

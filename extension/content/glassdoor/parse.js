@@ -14,7 +14,10 @@ function parseGlassdoorCard(cardEl) {
   }
 
   const companyEl = cardEl.querySelector('[data-test="employer-name"], .EmployerProfile_compactEmployerName__9MGcV, [class*="EmployerProfile_compactEmployerName"], [class*="employerName"]');
-  const company = companyEl ? companyEl.textContent.trim() : null;
+  const rawCompany = companyEl ? companyEl.textContent.trim() : null;
+  const company = rawCompany
+    ? rawCompany.replace(/\s*\d+\.\d+\s*$/, "").trim()
+    : null;
 
   const locationEl = cardEl.querySelector('[data-test="emp-location"], .JobCard_location__N_iYE, [class*="location"]');
   const location = locationEl ? locationEl.textContent.trim() : null;

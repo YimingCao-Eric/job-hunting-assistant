@@ -68,22 +68,24 @@ async def main() -> None:
         # ── d. List jobs ─────────────────────────────────────────────
         r = await c.get("/jobs", params={"limit": 5})
         assert r.status_code == 200, f"GET /jobs → {r.status_code}"
-        jobs = r.json()
+        payload = r.json()
+        jobs = payload["items"]
         ids = [j["id"] for j in jobs]
         assert job_id in ids, f"ingested job {job_id} not in job list"
+        assert payload.get("total", 0) >= len(jobs)
         print(f"  [OK] GET /jobs → {len(jobs)} job(s), ingested job present")
 
         # ── d2. GET /jobs?website= filter ───────────────────────────
         r = await c.get("/jobs", params={"website": "linkedin", "limit": 100})
         assert r.status_code == 200, f"GET /jobs?website=linkedin → {r.status_code}"
-        lj = r.json()
+        lj = r.json()["items"]
         assert all(j["website"] == "linkedin" for j in lj), lj
         assert job_id in [x["id"] for x in lj]
         print(f"  [OK] GET /jobs?website=linkedin → {len(lj)} row(s), all linkedin")
 
         r = await c.get("/jobs", params={"website": "indeed", "limit": 100})
         assert r.status_code == 200, f"GET /jobs?website=indeed → {r.status_code}"
-        ij = r.json()
+        ij = r.json()["items"]
         assert all(j["website"] == "indeed" for j in ij), ij
         assert indeed_job_id in [x["id"] for x in ij]
         print(f"  [OK] GET /jobs?website=indeed → {len(ij)} row(s), all indeed")

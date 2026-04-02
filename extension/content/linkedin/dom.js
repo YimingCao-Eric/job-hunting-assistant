@@ -1,4 +1,4 @@
-/* ── LinkedIn DOM: cards, session, extraction, stale filter ────────────── */
+/* ── LinkedIn DOM: cards, session, extraction ──────────────────────────── */
 
 function getCards(silent = false) {
   for (const selector of JOB_CARD_SELECTORS) {
@@ -100,9 +100,3 @@ function extractCardData(card) {
   };
 }
 
-function isStale(post_datetime) {
-  if (!post_datetime) return false;
-  const posted = new Date(post_datetime);
-  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-  return posted < cutoff;
-}

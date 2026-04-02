@@ -255,10 +255,6 @@ function RunCard({
                 <span className={s.statValue}>{run.jd_failed ?? 0}</span>
               </div>
               <div className={s.statItem}>
-                <span className={s.statLabel}>Early stop</span>
-                <span className={s.statValue}>{run.early_stop ? 'yes' : 'no'}</span>
-              </div>
-              <div className={s.statItem}>
                 <span className={s.statLabel}>Duration</span>
                 <span className={s.statValue}>
                   {formatDuration(run.started_at, run.completed_at)}
@@ -297,17 +293,11 @@ function RunCard({
               )}
               {(run.stale_skipped ?? 0) > 0 && (
                 <div className={s.scanNote}>
-                  ℹ {run.stale_skipped} phantom/stale cards skipped
-                </div>
-              )}
-              {run.early_stop === true && (
-                <div className={s.scanNote}>
-                  ℹ Scan stopped early (5 consecutive existing jobs)
+                  ℹ {run.stale_skipped} phantom cards skipped
                 </div>
               )}
               {(run.jd_failed ?? 0) === 0 &&
                 (run.stale_skipped ?? 0) === 0 &&
-                !run.early_stop &&
                 !run.session_error &&
                 !(Array.isArray(run.errors) && run.errors.length > 0) && (
                   <div className={s.scanOk}>✓ Clean scan — no errors</div>

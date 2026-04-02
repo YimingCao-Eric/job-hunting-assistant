@@ -57,7 +57,7 @@ class ScrapedJobRead(BaseModel):
     fit_score: float | None = None
     req_coverage: float | None = None
     confidence: str | None = None
-    skipped_reason: str | None = None
+    match_skip_reason: str | None = None
     required_skills: dict | None = None
     nice_to_have_skills: dict | None = None
     critical_skills: dict | None = None
@@ -71,7 +71,38 @@ class ScrapedJobRead(BaseModel):
     matched_at: datetime | None = None
 
 
+class JobsListResponse(BaseModel):
+    items: list[ScrapedJobRead]
+    total: int
+    limit: int
+    offset: int
+
+
 class ScrapedJobDetail(ScrapedJobRead):
     """Full detail including voyager_raw — used for GET /jobs/{id}."""
 
     voyager_raw: dict | None = None
+
+
+class JobUpdate(BaseModel):
+    """Partial update for PUT /jobs/{job_id}. Omitted fields are left unchanged."""
+
+    dismissed: bool | None = None
+
+    fit_score: float | None = None
+    match_level: str | None = None
+    match_reason: str | None = None
+    required_skills: dict | None = None
+    nice_to_have_skills: dict | None = None
+    critical_skills: dict | None = None
+    extracted_yoe: float | None = None
+    seniority_level: str | None = None
+    job_type: str | None = None
+    remote_type: str | None = None
+    salary_min_extracted: float | None = None
+    salary_max_extracted: float | None = None
+    confidence: str | None = None
+    req_coverage: float | None = None
+    matched_at: datetime | None = None
+    jd_incomplete: bool | None = None
+    match_skip_reason: str | None = None

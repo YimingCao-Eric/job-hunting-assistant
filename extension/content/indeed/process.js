@@ -6,6 +6,15 @@ function pushScanError(counters, entry) {
   counters.errors.push(entry);
 }
 
+/** Job detail page — sync DOM check only (no executeScript / async). */
+function detectIndeedEasyApply() {
+  return !!(
+    document.querySelector('[data-testid="indeed-apply-widget"]') ||
+    document.querySelector("#indeedApplyButton") ||
+    document.querySelector(".ia-IndeedApplyButton")
+  );
+}
+
 function parseIndeedPostDate(snippets) {
   if (!Array.isArray(snippets)) return null;
   const snippet = snippets.find(s => /posted|active/i.test(s));
@@ -36,7 +45,7 @@ async function processCard(anchor, config, counters) {
     return { skipped: true };
   }
 
-  const jdResult = await fetchIndeedJD(cardData.jk, config.scan_delay || "normal");
+  const jdResult = await fetchIndeedJD(cardData.jk);
 
   if (jdResult && jdResult.phantom) {
     // Phantom jk — not a real job, skip silently like a stale card
@@ -60,6 +69,9 @@ async function processCard(anchor, config, counters) {
     return { rateLimited: true };
   }
 
+  const easyApply = detectIndeedEasyApply();
+  const applyUrl = easyApply ? null : cardData.job_url;
+
   const result = await ingestJob({
     website: "indeed",
     job_title: cardData.job_title,
@@ -67,8 +79,8 @@ async function processCard(anchor, config, counters) {
     location: cardData.location,
     job_description: jdResult.jd,
     job_url: cardData.job_url,
-    apply_url: cardData.job_url,
-    easy_apply: cardData.easy_apply,
+    apply_url: applyUrl,
+    easy_apply: easyApply,
     post_datetime: parseIndeedPostDate(cardData.snippets),
     search_filters: {
       indeed_fromage: config.indeed_fromage,

@@ -62,7 +62,6 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
     return {
       ...counters,
       pages_scanned: currentPage,
-      early_stop: true,
       done: true,
     };
   }
@@ -78,14 +77,12 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
     return {
       ...counters,
       pages_scanned: currentPage,
-      early_stop: false,
       done: true,
     };
   }
 
   console.log(`[JHA] Page ${currentPage}: ${cards.length} cards`);
 
-  let consecutiveDuplicates = 0;
   for (const card of cards) {
     const { stopRequested: stopNow } =
       await chrome.storage.local.get("stopRequested");
@@ -94,7 +91,6 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
       return {
         ...counters,
         pages_scanned: currentPage,
-        early_stop: true,
         done: true,
       };
     }
@@ -122,24 +118,7 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
       tcSet.add(tcKey);
     }
 
-    const result = await processCard(card, config, counters, cardData);
-
-    if (result.error || !result.id) {
-      // skipped or ingest failure — already counted by processCard
-    } else if (result.already_exists || result.content_duplicate) {
-      consecutiveDuplicates++;
-    } else {
-      consecutiveDuplicates = 0;
-    }
-    if (consecutiveDuplicates >= 5) {
-      console.log("[JHA] 5 consecutive duplicates — early stop");
-      return {
-        ...counters,
-        pages_scanned: currentPage,
-        early_stop: true,
-        done: true,
-      };
-    }
+    await processCard(card, config, counters, cardData);
   }
 
   window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
@@ -172,7 +151,6 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
     return {
       ...counters,
       pages_scanned: currentPage,
-      early_stop: false,
       done: true,
     };
   }
@@ -201,7 +179,6 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
   return {
     ...counters,
     pages_scanned: currentPage,
-    early_stop: false,
     done: false,
   };
 }

@@ -22,7 +22,6 @@ class SearchConfigRead(BaseModel):
     f_job_type: str | None = None
     f_remote: str | None = None
     salary_min: int = 0
-    scan_delay: str = "normal"
     linkedin_f_tpr: str | None = None
     glassdoor: dict | None = None
 
@@ -48,6 +47,5 @@ class SearchConfigUpdate(BaseModel):
     f_job_type: str | None = None
     f_remote: str | None = None
     salary_min: int | None = None
-    scan_delay: str | None = None
     linkedin_f_tpr: str | None = None
     glassdoor: dict | None = None

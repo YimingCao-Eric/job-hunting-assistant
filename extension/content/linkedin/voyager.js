@@ -69,9 +69,7 @@ async function fetchJDViaVoyager(jobId) {
         }
       );
       console.log(`[JHA] Voyager ${jobId}: status=${res.status}`);
-      if (res.status === 429) {
-        console.warn("[JHA] Voyager API rate limited (429) — pausing 60s");
-        await sleep(60000);
+      if (res.status === 429 || res.status === 403 || res.status === 999) {
         return null;
       }
       if (!res.ok) {
