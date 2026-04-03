@@ -75,6 +75,12 @@ class ScrapedJob(Base):
     )
     dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
     skip_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    dedup_similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    dedup_original_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("scraped_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

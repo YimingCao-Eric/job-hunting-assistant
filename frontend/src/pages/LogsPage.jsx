@@ -4,7 +4,8 @@ import { formatAbsoluteTime } from '../utils/time'
 import { detectWebsiteFromRunLog } from '../utils/runLog'
 import PageTitle from '../components/PageTitle'
 import Spinner from '../components/Spinner'
-import s from './SearchReportPage.module.css'
+import s from './LogsPage.module.css'
+import j from './JobsPage.module.css'
 
 const SKIP_LABELS = {
   jd_failed: 'JD extraction failed',
@@ -12,6 +13,16 @@ const SKIP_LABELS = {
   no_id: 'No job ID',
   url_duplicate: 'Duplicate URL',
   content_duplicate: 'Duplicate content',
+  blacklisted: 'Blacklisted',
+  title_blacklisted: 'Title blacklisted',
+  job_type: 'Intern / co-op / student',
+  agency: 'Agency posting',
+  language: 'Language',
+  title_mismatch: 'Title mismatch',
+  contract_mismatch: 'Contract role',
+  remote_mismatch: 'Not remote',
+  sponsorship: 'No sponsorship',
+  already_scraped: 'Already scraped (dedup)',
 }
 
 function formatDuration(started_at, completed_at) {
@@ -111,6 +122,112 @@ function runStatusClass(status) {
   if (status === 'crashed') return s.runStatusCrashed
   if (status === 'running') return s.runStatusRunning
   return s.runStatus
+}
+
+/** Fixed order; url_exact omitted (removed from service). Only render keys present in gate_results. */
+const GATE_ORDER = [
+  { key: 'pass_0', label: 'Pass 0' },
+  { key: 'language', label: 'Language' },
+  { key: 'title_mismatch', label: 'Title Mismatch' },
+  { key: 'contract_mismatch', label: 'Contract' },
+  { key: 'remote_mismatch', label: 'Remote' },
+  { key: 'sponsorship', label: 'Sponsorship' },
+  { key: 'agency_jd', label: 'Agency (JD)' },
+  { key: 'hash_exact', label: 'Hash Exact' },
+  { key: 'cosine', label: 'Cosine' },
+]
+
+function formatGateTimeMs(ms) {
+  if (ms == null || Number.isNaN(ms)) return '0ms'
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function formatDedupTrigger(t) {
+  if (t === 'manual') return 'Manual'
+  if (t === 'post_scan') return 'Post-scan'
+  if (t === 'sync_pass2') return 'Sync'
+  return t || '\u2014'
+}
+
+function DedupReportCard({ report, open, onToggle }) {
+  const gr = report.gate_results || {}
+  const counts = report.skip_reason_counts || {}
+  const reasonEntries = Object.entries(counts).sort((a, b) => b[1] - a[1])
+
+  return (
+    <div className={s.runCard}>
+      <div
+        className={s.runHeader}
+        onClick={onToggle}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+        role="button"
+        tabIndex={0}
+      >
+        <span className={s.runSite}>🔁 Dedup</span>
+        <span className={s.runTime}>
+          {report.created_at ? formatAbsoluteTime(report.created_at) : '\u2014'}
+        </span>
+        <span className={s.dedupTriggerPill}>{formatDedupTrigger(report.trigger)}</span>
+        <span className={s.runStatus}>completed</span>
+        <span className={s.chevron}>{open ? '\u25bc' : '\u25b6'}</span>
+      </div>
+
+      {open && (
+        <div className={s.runBody}>
+          <div className={s.dedupTreeLine}>
+            {'\u251c\u2500 '}
+            {report.total_processed ?? 0} processed · {report.total_flagged ?? 0} removed ·{' '}
+            {report.total_passed ?? 0} passed · {formatGateTimeMs(report.duration_ms)}
+          </div>
+          <div className={s.dedupSectionTitle}>GATE PERFORMANCE</div>
+          <table className={s.dedupGateTable}>
+            <thead>
+              <tr>
+                <th>Gate</th>
+                <th>Checked</th>
+                <th>Flagged</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {GATE_ORDER.map(({ key, label }) => {
+                const g = gr[key]
+                if (!g) return null
+                const muted = (g.checked ?? 0) === 0
+                return (
+                  <tr key={key} className={muted ? s.gateRowMuted : undefined}>
+                    <td>{label}</td>
+                    <td>{g.checked}</td>
+                    <td>{g.flagged}</td>
+                    <td>{formatGateTimeMs(g.duration_ms)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div className={s.dedupSectionTitle}>REMOVED BY REASON</div>
+          <div className={s.dedupReasonBlock}>
+            {reasonEntries.length === 0 ? (
+              <span className={s.scanMuted}>No removals recorded.</span>
+            ) : (
+              reasonEntries.map(([reason, n]) => (
+                <div key={reason} className={s.dedupReasonLine}>
+                  <span className={s.dedupReasonKey}>{reason}</span>
+                  <span className={s.dedupReasonVal}>{n}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function RunCard({
@@ -404,7 +521,8 @@ function RunCard({
   )
 }
 
-export default function SearchReportPage() {
+export default function LogsPage() {
+  const [logSource, setLogSource] = useState('search')
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -413,6 +531,11 @@ export default function SearchReportPage() {
   const [loadingSkip, setLoadingSkip] = useState({})
   const [originalById, setOriginalById] = useState({})
   const originalByIdRef = useRef({})
+
+  const [dedupReports, setDedupReports] = useState([])
+  const [dedupLoading, setDedupLoading] = useState(false)
+  const [dedupError, setDedupError] = useState(null)
+  const [openDedupIds, setOpenDedupIds] = useState(() => new Set())
 
   useEffect(() => {
     originalByIdRef.current = originalById
@@ -436,6 +559,24 @@ export default function SearchReportPage() {
   }, [])
 
   useEffect(() => {
+    if (logSource !== 'dedup') return undefined
+    let cancelled = false
+    ;(async () => {
+      setDedupLoading(true)
+      setDedupError(null)
+      try {
+        const data = await api.getDedupReports()
+        if (!cancelled) setDedupReports(Array.isArray(data) ? data : [])
+      } catch {
+        if (!cancelled) setDedupError('Failed to load dedup reports.')
+      } finally {
+        if (!cancelled) setDedupLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [logSource])
+
+  useEffect(() => {
     if (!runs.length) return
     setOpenIds(prev => {
       if (prev.size > 0) return prev
@@ -447,6 +588,15 @@ export default function SearchReportPage() {
 
   const toggle = useCallback(id => {
     setOpenIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleDedup = useCallback(id => {
+    setOpenDedupIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -485,37 +635,83 @@ export default function SearchReportPage() {
 
   return (
     <div className={s.page}>
-      <PageTitle>Search Report</PageTitle>
+      <PageTitle>Logs</PageTitle>
 
-      {loading && (
-        <div style={{ padding: '2rem 0' }}>
-          <Spinner />
+      <div className={j.filterBar}>
+        <div className={j.filterTabs}>
+          <button
+            type="button"
+            className={`${j.filterTab} ${logSource === 'search' ? j.filterTabActive : ''}`}
+            onClick={() => setLogSource('search')}
+          >
+            Search
+          </button>
+          <button
+            type="button"
+            className={`${j.filterTab} ${logSource === 'dedup' ? j.filterTabActive : ''}`}
+            onClick={() => setLogSource('dedup')}
+          >
+            Dedup
+          </button>
         </div>
+      </div>
+
+      {logSource === 'search' && (
+        <>
+          {loading && (
+            <div style={{ padding: '2rem 0' }}>
+              <Spinner />
+            </div>
+          )}
+
+          {error && <p style={{ color: '#c0392b' }}>{error}</p>}
+
+          {!loading && !error && runs.length === 0 && (
+            <p style={{ color: '#666' }}>No scan runs yet.</p>
+          )}
+
+          {!loading &&
+            runs.map(run => {
+              const site = detectWebsiteFromRunLog(run) || 'linkedin'
+              return (
+                <RunCard
+                  key={run.id}
+                  run={run}
+                  site={site}
+                  open={openIds.has(String(run.id))}
+                  onToggle={() => toggle(String(run.id))}
+                  skippedJobs={skippedByRunId[String(run.id)]}
+                  loadingSkipped={loadingSkip[String(run.id)]}
+                  onLoadSkipped={() => loadSkippedForRun(run.id)}
+                  originalById={originalById}
+                />
+              )
+            })}
+        </>
       )}
 
-      {error && <p style={{ color: '#c0392b' }}>{error}</p>}
-
-      {!loading && !error && runs.length === 0 && (
-        <p style={{ color: '#666' }}>No scan runs yet.</p>
+      {logSource === 'dedup' && (
+        <>
+          {dedupLoading && (
+            <div style={{ padding: '2rem 0' }}>
+              <Spinner />
+            </div>
+          )}
+          {dedupError && <p style={{ color: '#c0392b' }}>{dedupError}</p>}
+          {!dedupLoading && !dedupError && dedupReports.length === 0 && (
+            <p style={{ color: '#666' }}>No dedup reports yet.</p>
+          )}
+          {!dedupLoading &&
+            dedupReports.map(report => (
+              <DedupReportCard
+                key={report.id}
+                report={report}
+                open={openDedupIds.has(String(report.id))}
+                onToggle={() => toggleDedup(String(report.id))}
+              />
+            ))}
+        </>
       )}
-
-      {!loading &&
-        runs.map(run => {
-          const site = detectWebsiteFromRunLog(run) || 'linkedin'
-          return (
-            <RunCard
-              key={run.id}
-              run={run}
-              site={site}
-              open={openIds.has(String(run.id))}
-              onToggle={() => toggle(String(run.id))}
-              skippedJobs={skippedByRunId[String(run.id)]}
-              loadingSkipped={loadingSkip[String(run.id)]}
-              onLoadSkipped={() => loadSkippedForRun(run.id)}
-              originalById={originalById}
-            />
-          )
-        })}
     </div>
   )
 }

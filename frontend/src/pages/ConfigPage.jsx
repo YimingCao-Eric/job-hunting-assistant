@@ -39,9 +39,20 @@ const DEFAULTS = {
   general_remote_only: false,
   linkedin_f_tpr: '',
   glassdoor: { ...GLASSDOOR_DEFAULT },
+  dedup_mode: 'manual',
+  blacklist_companies: [],
+  blacklist_locations: [],
+  blacklist_titles: [],
+  target_titles: [],
+  allowed_languages: ['en'],
+  no_contract: false,
+  remote_only: false,
+  needs_sponsorship: false,
+  no_agency: false,
+  dedup_fuzzy_threshold: 85,
 }
 
-const TAB_IDS = /** @type {const} */ (['general', 'linkedin', 'indeed', 'glassdoor'])
+const TAB_IDS = /** @type {const} */ (['general', 'linkedin', 'indeed', 'glassdoor', 'dedup'])
 
 function parseCsv(s) {
   return String(s ?? '')
@@ -129,6 +140,50 @@ function buildPreviewUrls(config) {
   return { linkedin, indeed, glassdoor }
 }
 
+function TagListField({ label, value, helper, onCommit }) {
+  const [input, setInput] = useState('')
+  const add = () => {
+    const v = input.trim()
+    if (!v || value.includes(v)) return
+    onCommit([...value, v])
+    setInput('')
+  }
+  const remove = (x) => onCommit(value.filter((t) => t !== x))
+  return (
+    <div className={s.field}>
+      <label className={s.label}>{label}</label>
+      <div className={s.tagRow}>
+        {value.map((v) => (
+          <span key={v} className={s.tag}>
+            {v}
+            <button
+              type="button"
+              className={s.tagRemove}
+              onClick={() => remove(v)}
+              aria-label={`Remove ${v}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          className={s.tagInput}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              add()
+            }
+          }}
+          placeholder="Type and press Enter"
+        />
+      </div>
+      {helper && <span className={s.hint}>{helper}</span>}
+    </div>
+  )
+}
+
 export default function ConfigPage() {
   const [config, setConfig] = useState(DEFAULTS)
   const [activeTab, setActiveTab] = useState(/** @type {typeof TAB_IDS[number]} */ ('general'))
@@ -191,6 +246,25 @@ export default function ConfigPage() {
               return stored
             })(),
           },
+          dedup_mode: data.dedup_mode === 'sync' ? 'sync' : 'manual',
+          blacklist_companies: Array.isArray(data.blacklist_companies)
+            ? data.blacklist_companies
+            : [],
+          blacklist_locations: Array.isArray(data.blacklist_locations)
+            ? data.blacklist_locations
+            : [],
+          blacklist_titles: Array.isArray(data.blacklist_titles) ? data.blacklist_titles : [],
+          target_titles: Array.isArray(data.target_titles) ? data.target_titles : [],
+          allowed_languages:
+            Array.isArray(data.allowed_languages) && data.allowed_languages.length
+              ? data.allowed_languages
+              : ['en'],
+          no_contract: data.no_contract === true,
+          remote_only: data.remote_only === true,
+          needs_sponsorship: data.needs_sponsorship === true,
+          no_agency: data.no_agency === true,
+          dedup_fuzzy_threshold:
+            data.dedup_fuzzy_threshold != null ? Number(data.dedup_fuzzy_threshold) : 85,
         }
         setConfig(next)
       })
@@ -207,6 +281,15 @@ export default function ConfigPage() {
       ...prev,
       glassdoor: { ...prev.glassdoor, ...patch },
     }))
+  }, [])
+
+  const saveDedup = useCallback(async (patch) => {
+    try {
+      await api.updateConfig(patch)
+      setConfig(prev => ({ ...prev, ...patch }))
+    } catch {
+      setError('Failed to save dedup settings')
+    }
   }, [])
 
   const handleSave = async (e) => {
@@ -350,6 +433,7 @@ export default function ConfigPage() {
                     {id === 'linkedin' && 'LinkedIn'}
                     {id === 'indeed' && 'Indeed'}
                     {id === 'glassdoor' && 'Glassdoor'}
+                    {id === 'dedup' && 'Dedup'}
                   </button>
                 ))}
               </div>
@@ -833,6 +917,118 @@ export default function ConfigPage() {
                     </div>
                   </div>
                 )}
+                </Fragment>
+              )}
+
+              {activeTab === 'dedup' && (
+                <Fragment>
+                  <h2 className={s.sectionHeading}>Dedup</h2>
+                  <div className={s.field}>
+                    <label className={s.label}>Dedup mode</label>
+                    <div className={s.modeToggle} role="group">
+                      <button
+                        type="button"
+                        className={`${s.modeBtn} ${config.dedup_mode === 'manual' ? s.modeBtnActive : ''}`}
+                        onClick={() => saveDedup({ dedup_mode: 'manual' })}
+                      >
+                        Manual
+                      </button>
+                      <button
+                        type="button"
+                        className={`${s.modeBtn} ${config.dedup_mode === 'sync' ? s.modeBtnActive : ''}`}
+                        onClick={() => saveDedup({ dedup_mode: 'sync' })}
+                      >
+                        Sync
+                      </button>
+                    </div>
+                  </div>
+
+                  <TagListField
+                    label="Company blacklist"
+                    value={config.blacklist_companies}
+                    onCommit={(v) => saveDedup({ blacklist_companies: v })}
+                  />
+                  <TagListField
+                    label="Location blacklist"
+                    value={config.blacklist_locations}
+                    onCommit={(v) => saveDedup({ blacklist_locations: v })}
+                  />
+                  <TagListField
+                    label="Title blacklist"
+                    value={config.blacklist_titles}
+                    onCommit={(v) => saveDedup({ blacklist_titles: v })}
+                  />
+                  <TagListField
+                    label="Target titles"
+                    value={config.target_titles}
+                    helper="Leave empty to disable title relevance gate"
+                    onCommit={(v) => saveDedup({ target_titles: v })}
+                  />
+                  <TagListField
+                    label="Allowed languages"
+                    value={config.allowed_languages}
+                    onCommit={(v) => saveDedup({ allowed_languages: v.length ? v : ['en'] })}
+                  />
+
+                  <div className={s.field}>
+                    <label className={s.checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={config.no_contract === true}
+                        onChange={e => saveDedup({ no_contract: e.target.checked })}
+                      />
+                      No contract roles
+                    </label>
+                  </div>
+                  <div className={s.field}>
+                    <label className={s.checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={config.remote_only === true}
+                        onChange={e => saveDedup({ remote_only: e.target.checked })}
+                      />
+                      Remote only
+                    </label>
+                  </div>
+                  <div className={s.field}>
+                    <label className={s.checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={config.needs_sponsorship === true}
+                        onChange={e => saveDedup({ needs_sponsorship: e.target.checked })}
+                      />
+                      Needs sponsorship
+                    </label>
+                  </div>
+                  <div className={s.field}>
+                    <label className={s.checkboxLabel}>
+                      <input
+                        type="checkbox"
+                        checked={config.no_agency === true}
+                        onChange={e => saveDedup({ no_agency: e.target.checked })}
+                      />
+                      No agency postings
+                    </label>
+                  </div>
+
+                  <div className={s.field}>
+                    <label className={s.label}>Fuzzy match threshold (0–100)</label>
+                    <input
+                      className={s.input}
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={config.dedup_fuzzy_threshold}
+                      onChange={e =>
+                        setConfig(prev => ({
+                          ...prev,
+                          dedup_fuzzy_threshold: parseInt(e.target.value, 10) || 0,
+                        }))}
+                      onBlur={() =>
+                        saveDedup({ dedup_fuzzy_threshold: config.dedup_fuzzy_threshold })}
+                    />
+                    <span className={s.hint}>0 to disable cosine similarity matching</span>
+                  </div>
                 </Fragment>
               )}
 

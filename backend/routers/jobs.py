@@ -86,14 +86,18 @@ async def ingest_job(
         raw_description_hash=desc_hash,
     )
     new_job.ingest_source = "extension"
+
     db.add(new_job)
     await db.flush()
 
+    resp_skip = new_job.skip_reason or (
+        "content_duplicate" if content_duplicate else None
+    )
     return ScrapedJobIngestResponse(
         id=new_job.id,
         already_exists=False,
         content_duplicate=content_duplicate,
-        skip_reason="content_duplicate" if content_duplicate else None,
+        skip_reason=resp_skip,
     )
 
 
@@ -107,12 +111,21 @@ async def list_jobs(
     date_to: date | None = None,
     scraped_from: date | None = None,
     scraped_to: date | None = None,
+    dedup_status: str | None = None,
     limit: int = Query(25, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    conditions = [ScrapedJob.skip_reason.is_(None)]
+    conditions = []
+    if dedup_status == "removed":
+        conditions.append(ScrapedJob.skip_reason.isnot(None))
+    elif dedup_status == "passed":
+        conditions.append(ScrapedJob.skip_reason.is_(None))
+    elif dedup_status == "all":
+        pass
+    else:
+        conditions.append(ScrapedJob.skip_reason.is_(None))
 
     if website:
         conditions.append(ScrapedJob.website == website)
@@ -135,16 +148,25 @@ async def list_jobs(
         )
         conditions.append(ScrapedJob.created_at < hi)
 
-    count_stmt = select(func.count()).select_from(ScrapedJob).where(*conditions)
-    total = (await db.execute(count_stmt)).scalar_one()
+    if conditions:
+        count_stmt = select(func.count()).select_from(ScrapedJob).where(*conditions)
+        stmt = (
+            select(ScrapedJob)
+            .where(*conditions)
+            .order_by(ScrapedJob.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    else:
+        count_stmt = select(func.count()).select_from(ScrapedJob)
+        stmt = (
+            select(ScrapedJob)
+            .order_by(ScrapedJob.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
 
-    stmt = (
-        select(ScrapedJob)
-        .where(*conditions)
-        .order_by(ScrapedJob.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
+    total = (await db.execute(count_stmt)).scalar_one()
 
     result = await db.execute(stmt)
     items = result.scalars().all()

@@ -10,6 +10,9 @@ class RunLogCreate(BaseModel):
     search_keyword: str | None = None
     search_location: str | None = None
     search_filters: dict | None = None
+    scan_all: bool = False
+    scan_all_position: int | None = None
+    scan_all_total: int | None = None
 
 
 class RunLogUpdate(BaseModel):
@@ -48,3 +51,6 @@ class RunLogRead(BaseModel):
     error_message: str | None = None
     errors: list | None = None
     created_at: datetime
+    scan_all: bool = False
+    scan_all_position: int | None = None
+    scan_all_total: int | None = None

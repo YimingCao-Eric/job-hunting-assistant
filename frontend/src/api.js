@@ -29,13 +29,16 @@ export const api = {
     return data;
   },
 
-  // Scan trigger
-  triggerScan: (website = null) =>
-    fetch(`${BASE_URL}/extension/trigger-scan`, {
+  // Scan trigger (optional extra fields e.g. scan_all for Scan All sequence)
+  triggerScan: (website = null, extra = {}) => {
+    const body = { ...extra };
+    if (website) body.website = website;
+    return fetch(`${BASE_URL}/extension/trigger-scan`, {
       method: 'POST',
       headers: headers(),
-      body: JSON.stringify(website ? { website } : {}),
-    }).then(r => r.json()),
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+  },
 
   // Stop scan
   stopScan: () =>
@@ -62,4 +65,42 @@ export const api = {
 
   getExtensionState: () =>
     fetch(`${BASE_URL}/extension/state`, { headers: headers() }).then(r => r.json()),
+
+  runDedup: () =>
+    fetch(`${BASE_URL}/jobs/dedup`, {
+      method: 'POST',
+      headers: headers(),
+    }).then((r) => r.json()),
+
+  resetDedup: () =>
+    fetch(`${BASE_URL}/jobs/dedup/reset`, {
+      method: 'POST',
+      headers: headers(),
+    }).then((r) => r.json()),
+
+  getDedupReports: () =>
+    fetch(`${BASE_URL}/dedup/reports`, {
+      headers: headers(),
+    }).then((r) => r.json()),
+
+  getDedupReport: (id) =>
+    fetch(`${BASE_URL}/dedup/reports/${id}`, {
+      headers: headers(),
+    }).then((r) => r.json()),
+
+  getJobsByDedupStatus: async (status, params = {}) => {
+    const cleanParams = Object.fromEntries(
+      Object.entries({ dedup_status: status, ...params }).filter(
+        ([_, v]) => v !== null && v !== undefined && v !== ''
+      )
+    );
+    const qs = new URLSearchParams(cleanParams).toString();
+    const data = await fetch(`${BASE_URL}/jobs?${qs}`, {
+      headers: headers(),
+    }).then((r) => r.json());
+    if (Array.isArray(data)) {
+      return { items: data, total: data.length, limit: data.length, offset: 0 };
+    }
+    return data;
+  },
 };

@@ -18,6 +18,9 @@ class ExtensionState(Base):
     scan_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     stop_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     scan_website: Mapped[str | None] = mapped_column(String, nullable=True)
+    scan_all: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    scan_all_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scan_all_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

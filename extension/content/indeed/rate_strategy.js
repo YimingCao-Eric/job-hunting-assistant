@@ -82,7 +82,7 @@ async function _strategy6(jk, apiKey) {
       .trim();
   }
 
-  if (!jd || jd.length < 50) return { phantom: true };
+  if (!jd || !String(jd).trim()) return { phantom: true };
   return { jd };
 }
 

@@ -1,6 +1,6 @@
 # Job Hunting Assistant — Frontend
 
-Single-page app for **search configuration**, **job list**, and **search reports**. It talks to the FastAPI backend over **REST** using a small `api.js` client and bearer auth.
+Single-page app for **search configuration**, **job list**, **run logs** (scan + dedup reports), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth.
 
 For Docker-based full-stack setup, see the [repository root README](../README.md).
 
@@ -11,7 +11,7 @@ For Docker-based full-stack setup, see the [repository root README](../README.md
 | UI | [React 18](https://react.dev/) |
 | Routing | [React Router v6](https://reactrouter.com/) |
 | Build | [Vite](https://vite.dev/) (dev server default port **5173**) |
-| Styling | Plain CSS modules (`*.module.css`) |
+| Styling | CSS modules (`*.module.css`) |
 
 ## Layout
 
@@ -26,16 +26,17 @@ frontend/
 │   ├── App.jsx          Routes + nav
 │   ├── api.js           Central fetch wrapper (VITE_API_URL, VITE_AUTH_TOKEN)
 │   ├── pages/
-│   │   ├── ConfigPage.jsx   Search config (keyword, location, LinkedIn/Indeed/Glassdoor filters, URL preview)
-│   │   ├── JobsPage.jsx     Job list, filters, dismiss, scan controls (Scan LinkedIn/Indeed/Glassdoor, Scan All, Stop, progress bar)
-│   │   └── SearchReportPage.jsx
+│   │   ├── ConfigPage.jsx
+│   │   ├── JobsPage.jsx        Scans, Scan All, job grid, filters
+│   │   ├── LogsPage.jsx        Search runs + expandable dedup reports
+│   │   └── DedupPage.jsx       Dedup mode, run/reset, filter pills, job grid
 │   ├── components/
-│   │   ├── PageTitle.jsx
-│   │   └── Spinner.jsx
+│   │   ├── PageTitle.jsx, Spinner.jsx, JobCard.jsx, JobModal.jsx
+│   │   └── DedupSkipBadge.jsx  Skip reason + lazy fetch for dedup_original_job
 │   └── utils/
-│       ├── location.js      normaliseLocation — strips work-mode suffix, abbreviates provinces
-│       ├── runLog.js        detectWebsiteFromRunLog
-│       └── time.js          formatAbsoluteTime
+│       ├── location.js
+│       ├── runLog.js
+│       └── time.js
 └── .env.example
 ```
 
@@ -43,11 +44,14 @@ frontend/
 
 | Path | Page |
 | --- | --- |
-| `/` | Config — edit search config (keyword, location, LinkedIn/Indeed/Glassdoor filters, URL preview per source) |
-| `/jobs` | Jobs — list, filter, dismiss scraped jobs; trigger scans (LinkedIn / Indeed / Glassdoor / Scan All) and monitor live scan progress |
-| `/search-report` | Search Report — run history / reporting |
+| `/` | Config — search config, dedup mode, site filters, URL previews |
+| `/jobs` | Jobs — list, filters, scans (LinkedIn / Indeed / Glassdoor / **Scan All**), progress |
+| `/logs` | Logs — **Search** tab (extension run logs) and **Dedup** tab (dedup reports) |
+| `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters |
 
-The extension popup only syncs a **subset** of fields; use **Config** for full control (e.g. `website`, `glassdoor`, `f_tpr_bound`).
+Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/dedup`** (redirects).
+
+The extension popup only syncs a **subset** of fields; use **Config** for full control (`website`, Glassdoor, `dedup_mode`, etc.).
 
 ## Environment
 
@@ -88,19 +92,24 @@ Environment in Compose sets `VITE_API_URL` and `VITE_AUTH_TOKEN` for the dev ser
 
 ## API client (`src/api.js`)
 
-The `api` object exports these methods (all requests use the shared `Authorization` header from `VITE_AUTH_TOKEN`):
+The `api` object exports methods (all requests use the shared `Authorization` header from `VITE_AUTH_TOKEN`), including:
 
 | Method | Purpose |
 | --- | --- |
-| `getConfig` | `GET /config` |
-| `updateConfig(data)` | `PUT /config` |
-| `getJobs(params)` | `GET /jobs` with optional query params |
-| `getJob(jobId)` | `GET /jobs/{id}` |
-| `getSkippedJobs(scanRunId, params)` | `GET /jobs/skipped` |
-| `triggerScan(website)` | `POST /extension/trigger-scan` (optional `website`) |
+| `getConfig` / `updateConfig` | `/config` |
+| `getJobs` | `GET /jobs` |
+| `getJob` / `getJobsByDedupStatus` | Job detail and dedup-filtered lists |
+| `resetDedup` | `POST /jobs/dedup/reset` |
+| `runDedup` | `POST /jobs/dedup` |
+| `getDedupReports` | `GET /dedup/reports` |
+| `triggerScan(website, extra?)` | `POST /extension/trigger-scan` — optional **`extra`** for Scan All (`scan_all`, `scan_all_position`, `scan_all_total`) |
 | `stopScan` | `POST /extension/trigger-stop` |
-| `getRunLogs(limit)` | `GET /extension/run-log` |
+| `getRunLogs` | `GET /extension/run-log` |
 | `getExtensionState` | `GET /extension/state` |
+
+## Scan All (Jobs page)
+
+**Scan All** loops `linkedin` → `indeed` → `glassdoor` and calls **`triggerScan(website, { scan_all: true, scan_all_position, scan_all_total })`** so the backend can run **sync dedup** only after the **last** site completes. Single-site buttons call **`triggerScan('linkedin')`** (etc.) with no extra payload.
 
 ## Linting
 

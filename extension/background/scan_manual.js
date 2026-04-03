@@ -1,7 +1,12 @@
 /* ── Manual scan handler ──────────────────────────────────────────────── */
 
 async function handleManualScan(options = {}) {
-  const { websiteOverride = null } = options;
+  const {
+    websiteOverride = null,
+    scan_all = false,
+    scan_all_position = null,
+    scan_all_total = null,
+  } = options;
 
   await chrome.storage.local.set({ stopRequested: false });
   await chrome.storage.local.remove("scanPageState");
@@ -112,6 +117,12 @@ async function handleManualScan(options = {}) {
           config.general_remote_only === true ? true : null,
       },
     };
+  }
+
+  if (scan_all) {
+    runLogBody.scan_all = true;
+    runLogBody.scan_all_position = scan_all_position;
+    runLogBody.scan_all_total = scan_all_total;
   }
 
   const runRes = await fetch(`${backendUrl}/extension/run-log/start`, {

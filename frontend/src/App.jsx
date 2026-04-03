@@ -1,7 +1,8 @@
-import { Routes, Route, NavLink } from 'react-router-dom'
+import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import ConfigPage from './pages/ConfigPage'
 import JobsPage from './pages/JobsPage'
-import SearchReportPage from './pages/SearchReportPage'
+import LogsPage from './pages/LogsPage'
+import DedupPage from './pages/DedupPage'
 import './App.css'
 
 export default function App() {
@@ -15,15 +16,22 @@ export default function App() {
         <NavLink to="/jobs" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
           Jobs
         </NavLink>
-        <NavLink to="/search-report" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
-          Search Report
+        <NavLink to="/logs" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
+          Logs
+        </NavLink>
+        <NavLink to="/dedup" className={({isActive}) => isActive ? 'nav-link active' : 'nav-link'}>
+          Dedup
         </NavLink>
       </nav>
       <main className="main">
         <Routes>
           <Route path="/" element={<ConfigPage />} />
           <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/search-report" element={<SearchReportPage />} />
+          <Route path="/logs" element={<LogsPage />} />
+          <Route path="/search-report" element={<Navigate to="/logs" replace />} />
+          <Route path="/dedup" element={<DedupPage />} />
+          <Route path="/dedup/passed" element={<Navigate to="/dedup" replace />} />
+          <Route path="/dedup/removed" element={<Navigate to="/dedup" replace />} />
         </Routes>
       </main>
     </div>

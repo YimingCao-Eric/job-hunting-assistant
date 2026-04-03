@@ -1,6 +1,6 @@
 # Job Hunting Assistant — Backend
 
-FastAPI service that stores scraped jobs in **PostgreSQL**, serves **JSON search config** from a file, and coordinates the **Chrome extension** via extension state and run logs.
+FastAPI service that stores scraped jobs in **PostgreSQL**, serves **JSON search config** from a file, coordinates the **Chrome extension** via extension state and run logs, and runs the **dedup** pipeline (Pass 0 / 1 / 2) on demand or after scans when configured.
 
 For full-stack setup (Docker, extension, web UI), see the [repository root README](../README.md).
 
@@ -20,14 +20,18 @@ backend/
 ├── main.py              FastAPI app, CORS, /health, router includes
 ├── core/
 │   ├── config.py        Pydantic settings (env: DATABASE_URL, CONFIG_PATH, …)
-│   ├── database.py      Async engine, sessions, migration runner
+│   ├── database.py      Async engine, AsyncSessionLocal, get_db, migration runner
+│   ├── config_file.py   read/write config.json
 │   └── auth.py          Bearer token check
-├── models/              SQLAlchemy models (scraped jobs, extension state, run logs)
+├── dedup/
+│   └── service.py       run_dedup, Pass 0/1/2, gate metrics, reports
+├── models/              SQLAlchemy models (scraped jobs, extension state, run logs, dedup reports)
 ├── schemas/             Pydantic request/response models
 ├── routers/
-│   ├── jobs.py          POST /jobs/ingest, GET/PATCH /jobs, skipped rows
-│   ├── config.py        GET/PUT /config (JSON file at CONFIG_PATH)
-│   └── extension.py     State, scan/stop triggers, run logs, session errors
+│   ├── jobs.py          POST /jobs/ingest, GET/PUT /jobs, skipped, dedup triggers
+│   ├── config.py        GET/PUT /config
+│   ├── extension.py      State, scan/stop triggers, run logs, session errors, sync-dedup on run complete
+│   └── dedup.py         GET dedup reports, POST /jobs/dedup/reset
 ├── alembic/             Migration scripts
 ├── alembic.ini
 ├── requirements.txt
@@ -101,30 +105,39 @@ No auth. Returns `{ "status": "ok", "db": "ok" | "error" }`.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/jobs/ingest` | Ingest a job from the extension (dedup by URL and description hash) |
-| `GET` | `/jobs` | Paginated list with filters (`website`, `dismissed`, `scan_run_id`, dates, …) |
+| `POST` | `/jobs/ingest` | Ingest a job (URL uniqueness, content-hash duplicate handling). Does **not** run Pass 0/1 per row; **`dedup_mode`** does not affect ingest. |
+| `GET` | `/jobs` | Paginated list; filters include `website`, `dismissed`, **`dedup_status`**, date filters, etc. |
 | `GET` | `/jobs/skipped` | Rows skipped in a run (`scan_run_id` required) |
 | `GET` | `/jobs/{job_id}` | Job detail |
-| `PUT` | `/jobs/{job_id}` | Partial update via **`JobUpdate`** body (`dismissed`, matching pipeline fields such as `fit_score`, `match_level`, `match_skip_reason`, …); omitted keys unchanged |
+| `PUT` | `/jobs/{job_id}` | Partial update (`JobUpdate`) |
+| `POST` | `/jobs/dedup` | Run **`run_dedup()`** (manual) |
+| `POST` | `/jobs/dedup/reset` | Clear dedup service skip reasons for eligible rows |
+
+### Dedup (`/dedup` and job-scoped)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/dedup/reports` | List dedup reports |
+| `GET` | `/dedup/reports/{id}` | Single report |
 
 ### Config (`/config`)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/config` | Read merged search config from JSON file |
-| `PUT` | `/config` | Partial update (unset fields preserved) |
+| `PUT` | `/config` | Partial update (unset fields preserved). Includes **`dedup_mode`**: `"manual"` \| `"sync"`. |
 
 ### Extension (`/extension`)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` / `PUT` | `/extension/state` | Extension counters and flags (e.g. `current_page`, `today_searches`) |
-| `POST` | `/extension/trigger-scan` | Request a scan; optional `{ "website": "linkedin" \| "indeed" \| "glassdoor" }` |
-| `GET` | `/extension/pending-scan` | Atomically consume pending scan (used by extension poll) |
+| `GET` / `PUT` | `/extension/state` | Extension counters and flags |
+| `POST` | `/extension/trigger-scan` | Request a scan; body may include `website`, **`scan_all`**, **`scan_all_position`**, **`scan_all_total`** (Scan All sequence). |
+| `GET` | `/extension/pending-scan` | Consume pending scan; returns **`website`** and Scan All metadata |
 | `POST` | `/extension/trigger-stop` | Request stop; marks running run logs failed |
-| `GET` | `/extension/pending-stop` | Atomically consume pending stop |
-| `POST` | `/extension/run-log/start` | Start a run log; returns `{ id }` |
-| `PUT` | `/extension/run-log/{log_id}` | Update run log (status, counters, errors, …) |
+| `GET` | `/extension/pending-stop` | Consume pending stop |
+| `POST` | `/extension/run-log/start` | Start a run log; body may include **`scan_all`** fields |
+| `PUT` | `/extension/run-log/{log_id}` | Update run log. On transition to **`status: completed`**, if **`dedup_mode == sync`**, schedules **`run_dedup`** in a **BackgroundTask** (new DB session): single-site always; Scan All only when **`scan_all_position == scan_all_total`**. |
 | `GET` | `/extension/run-log` | List run logs |
 | `POST` | `/extension/session-error` | Attach session error to the latest running log |
 
@@ -149,4 +162,5 @@ python smoke_test.py
 ## Development notes
 
 - **Startup:** Stale `extension_run_logs` rows stuck in `running` for more than 2 hours are marked `failed` on API boot.
+- **Sync dedup:** Implemented with FastAPI **`BackgroundTasks`**; the task opens **`AsyncSessionLocal`** and calls **`run_dedup(..., scan_run_id=log_id, trigger="post_scan")`**. Do not reuse the request `db` session in the task.
 - **Production:** Replace `core/auth.py` dev-token logic with real authentication before exposing the API publicly.

@@ -12,6 +12,11 @@ async function pollForScanTrigger() {
         console.log("[JHA] Scan triggered from frontend");
         await handleManualScan({
           websiteOverride: data.website || null,
+          scan_all: !!data.scan_all,
+          scan_all_position:
+            data.scan_all_position != null ? data.scan_all_position : null,
+          scan_all_total:
+            data.scan_all_total != null ? data.scan_all_total : null,
         });
       }
     }

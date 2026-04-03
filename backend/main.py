@@ -8,6 +8,7 @@ from sqlalchemy import text, update
 from core.database import AsyncSessionLocal, run_migrations
 from models.extension_run_log import ExtensionRunLog
 from routers import config as config_router
+from routers import dedup as dedup_router
 from routers import extension as extension_router
 from routers import jobs as jobs_router
 
@@ -58,6 +59,7 @@ app.add_middleware(
 app.include_router(jobs_router.router)
 app.include_router(config_router.router)
 app.include_router(extension_router.router)
+app.include_router(dedup_router.router)
 
 
 @app.get("/health")

@@ -1,0 +1,222 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  width: 100%;
+}
+
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.modeBtn {
+  padding: 8px 16px;
+  border: none;
+  background: #f5f5f5;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.modeBtnActive {
+  background: #1a5fb4;
+  color: #fff;
+}
+
+.runBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  background: #1a5fb4;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dedupActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.resetBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid #c0392b;
+  background: #fff;
+  color: #c0392b;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resetBtn:hover:not(:disabled) {
+  background: #fde8e8;
+}
+
+.resetBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.successMsg {
+  color: #2e7d32;
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.dialog {
+  background: #fff;
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  border: 1px solid #e5e5e5;
+}
+
+.dialogTitle {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #222;
+}
+
+.dialogBody {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #444;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.dialogBtnSecondary {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: #f5f5f5;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.dialogBtnSecondary:hover:not(:disabled) {
+  background: #ebebeb;
+}
+
+.dialogBtnDanger {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: #c0392b;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dialogBtnDanger:hover:not(:disabled) {
+  background: #a93226;
+}
+
+.dialogBtnSecondary:disabled,
+.dialogBtnDanger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.panel {
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.panelTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.summary {
+  color: #444;
+  margin-bottom: 16px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.table th {
+  font-weight: 600;
+  color: #333;
+}
+
+.subNav {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.subNav a {
+  color: #1a5fb4;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.subNav a:hover {
+  text-decoration: underline;
+}
+
+.empty {
+  color: #666;
+  font-style: italic;
+}

@@ -1,7 +1,5 @@
 /* ── LinkedIn Voyager API for job description & company ──────────────── */
 
-const MIN_JD_LEN = 50;
-
 function getCsrfToken() {
   const match = document.cookie.match(/JSESSIONID=([^;]+)/);
   return match ? match[1].replace(/"/g, "") : null;
@@ -89,7 +87,7 @@ async function fetchJDViaVoyager(jobId) {
       const trimmed = jdRaw != null ? String(jdRaw).trim() : "";
       console.log(`[JHA] Voyager ${jobId}: jdLength=${trimmed.length}`);
 
-      if (trimmed.length >= MIN_JD_LEN) {
+      if (trimmed.length > 0) {
         const apply_url =
           data?.data?.applyMethod?.companyApplyUrl ||
           data?.data?.applyMethod?.easyApplyUrl ||

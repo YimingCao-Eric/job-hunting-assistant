@@ -13,6 +13,7 @@ from core.database import Base  # noqa: E402
 from models.scraped_job import ScrapedJob  # noqa: E402, F401
 from models.extension_state import ExtensionState  # noqa: E402, F401
 from models.extension_run_log import ExtensionRunLog  # noqa: E402, F401
+from models.dedup_report import DedupReport  # noqa: E402, F401
 
 config = context.config
 if config.config_file_name is not None:

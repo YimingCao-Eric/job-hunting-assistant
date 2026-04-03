@@ -35,5 +35,10 @@
     "seniorityType": null,
     "sortBy": "date_desc"
   },
-  "linkedin_f_tpr": "24"
+  "linkedin_f_tpr": "24",
+  "dedup_mode": "manual",
+  "allowed_languages": [
+    "en",
+    "cn"
+  ]
 }

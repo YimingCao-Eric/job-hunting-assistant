@@ -3,6 +3,13 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 
+class TriggerScanRequest(BaseModel):
+    website: str | None = None
+    scan_all: bool = False
+    scan_all_position: int | None = None
+    scan_all_total: int | None = None
+
+
 class ExtensionStateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -16,6 +23,9 @@ class ExtensionStateRead(BaseModel):
     scan_requested: bool = False
     stop_requested: bool = False
     scan_website: str | None = None
+    scan_all: bool = False
+    scan_all_position: int | None = None
+    scan_all_total: int | None = None
     updated_at: datetime
 
 

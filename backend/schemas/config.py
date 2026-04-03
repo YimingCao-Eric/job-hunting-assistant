@@ -1,3 +1,5 @@
+from typing import Optional
+
 from pydantic import BaseModel
 
 
@@ -24,6 +26,17 @@ class SearchConfigRead(BaseModel):
     salary_min: int = 0
     linkedin_f_tpr: str | None = None
     glassdoor: dict | None = None
+    dedup_mode: str = "manual"
+    blacklist_companies: list[str] = []
+    blacklist_locations: list[str] = []
+    blacklist_titles: list[str] = []
+    target_titles: list[str] = []
+    allowed_languages: list[str] = ["en"]
+    no_contract: bool = False
+    remote_only: bool = False
+    needs_sponsorship: bool = False
+    no_agency: bool = False
+    dedup_fuzzy_threshold: int = 85
 
 
 class SearchConfigUpdate(BaseModel):
@@ -49,3 +62,14 @@ class SearchConfigUpdate(BaseModel):
     salary_min: int | None = None
     linkedin_f_tpr: str | None = None
     glassdoor: dict | None = None
+    dedup_mode: Optional[str] = None
+    blacklist_companies: Optional[list[str]] = None
+    blacklist_locations: Optional[list[str]] = None
+    blacklist_titles: Optional[list[str]] = None
+    target_titles: Optional[list[str]] = None
+    allowed_languages: Optional[list[str]] = None
+    no_contract: Optional[bool] = None
+    remote_only: Optional[bool] = None
+    needs_sponsorship: Optional[bool] = None
+    no_agency: Optional[bool] = None
+    dedup_fuzzy_threshold: Optional[int] = None

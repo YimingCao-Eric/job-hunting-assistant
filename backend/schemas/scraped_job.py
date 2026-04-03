@@ -49,6 +49,8 @@ class ScrapedJobRead(BaseModel):
     original_job_id: UUID | None = None
     dismissed: bool
     skip_reason: str | None = None
+    dedup_similarity_score: float | None = None
+    dedup_original_job_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 

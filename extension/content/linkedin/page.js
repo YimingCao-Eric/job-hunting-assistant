@@ -36,14 +36,8 @@ function buildLinkedInSearchUrl(config, startOffset) {
   return `https://www.linkedin.com/jobs/search?${params.toString()}`;
 }
 
-function titleCompanyDedupKey(jobTitle, company) {
-  return `${String(jobTitle).trim().toLowerCase()}|${String(company).trim().toLowerCase()}`;
-}
-
-async function runSinglePage(config, state, processedJobIds, processedTitleCompany) {
+async function runSinglePage(config, state, processedJobIds) {
   const idSet = processedJobIds instanceof Set ? processedJobIds : new Set();
-  const tcSet =
-    processedTitleCompany instanceof Set ? processedTitleCompany : new Set();
 
   const counters = {
     scraped: state.scraped || 0,
@@ -107,17 +101,6 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
     const cardData = extractCardData(card);
     if (!cardData || !cardData.job_id) continue;
 
-    if (cardData.job_title && cardData.company) {
-      const tcKey = titleCompanyDedupKey(cardData.job_title, cardData.company);
-      if (currentPage > 1 && tcSet.has(tcKey)) {
-        console.log(
-          `[JHA-LinkedIn] Skipping promoted duplicate: ${cardData.job_title} @ ${cardData.company}`
-        );
-        continue;
-      }
-      tcSet.add(tcKey);
-    }
-
     await processCard(card, config, counters, cardData);
   }
 
@@ -161,7 +144,6 @@ async function runSinglePage(config, state, processedJobIds, processedTitleCompa
       current_page: currentPage + 1,
       today_searches: (state.today_searches || 0) + 1,
       processed_job_ids: Array.from(idSet),
-      processed_title_company: Array.from(tcSet),
     },
     liveProgress: { ...counters, page: currentPage + 1 },
   });

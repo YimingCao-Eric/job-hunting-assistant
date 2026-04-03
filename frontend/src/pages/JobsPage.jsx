@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { api } from '../api'
-import { normaliseLocation } from '../utils/location'
 import { detectWebsiteFromRunLog } from '../utils/runLog'
 import PageTitle from '../components/PageTitle'
 import Spinner from '../components/Spinner'
+import JobCard from '../components/JobCard'
+import JobModal from '../components/JobModal'
 import s from './JobsPage.module.css'
 
 const JOBS_PER_PAGE = 10
@@ -28,15 +29,6 @@ function getScanAllPct(websiteIdx, scraped, totals, website) {
   return Math.min(99, Math.round(completedPct + withinSlice))
 }
 
-function formatDateOnly(iso) {
-  if (!iso) return null
-  return new Date(iso).toLocaleDateString('en-CA', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
-}
-
 function formatStartedTime(isoString) {
   if (!isoString) return ''
   const d = new Date(isoString)
@@ -45,47 +37,6 @@ function formatStartedTime(isoString) {
     minute: '2-digit',
     hour12: true,
   })
-}
-
-function linkedInIsPromoted(job) {
-  if (job.website !== 'linkedin' || !job.post_datetime || !job.created_at) return false
-  const gapDays = Math.floor(
-    (new Date(job.created_at) - new Date(job.post_datetime)) / (1000 * 60 * 60 * 24)
-  )
-  return gapDays > 2
-}
-
-function jobIsPromotedGap(job) {
-  if (!job.post_datetime || !job.created_at) return false
-  return (
-    Math.floor(
-      (new Date(job.created_at) - new Date(job.post_datetime)) / (1000 * 60 * 60 * 24)
-    ) > 2
-  )
-}
-
-function jobIsRemote(job) {
-  const title = (job.job_title || '').toLowerCase()
-  const loc = (job.location || '').toLowerCase()
-  return loc.includes('remote') || title.includes('remote')
-}
-
-function jobIsInternship(job) {
-  const title = (job.job_title || '').toLowerCase()
-  return /intern|co-op|coop|co op|internship/.test(title)
-}
-
-function WebsiteBadge({ website }) {
-  if (website === 'linkedin') {
-    return <span className={`${s.websiteBadge} ${s.badgeLinkedIn}`}>🔵 LinkedIn</span>
-  }
-  if (website === 'indeed') {
-    return <span className={`${s.websiteBadge} ${s.badgeIndeed}`}>🟢 Indeed</span>
-  }
-  if (website === 'glassdoor') {
-    return <span className={`${s.websiteBadge} ${s.badgeGlassdoor}`}>🟢 Glassdoor</span>
-  }
-  return null
 }
 
 function buildPageList(page, totalPages) {
@@ -142,100 +93,6 @@ function PageNumbers({ page, totalPages, onPageChange }) {
               </button>
             ),
       )}
-    </div>
-  )
-}
-
-function JobModal({ job, onClose }) {
-  useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose(); }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
-
-  const isPromoted = linkedInIsPromoted(job)
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.5)',
-        zIndex: 1000,
-        display: 'flex', alignItems: 'flex-start',
-        justifyContent: 'center',
-        paddingTop: '5vh',
-        overflowY: 'auto',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: '#fff',
-          borderRadius: '12px',
-          width: '100%',
-          maxWidth: '760px',
-          margin: '0 16px 40px',
-          padding: '32px',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-          position: 'relative',
-        }}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          style={{
-            position: 'absolute', top: '16px', right: '16px',
-            background: 'none', border: 'none', fontSize: '22px',
-            cursor: 'pointer', color: '#666', lineHeight: 1,
-          }}
-        >
-          &times;
-        </button>
-
-        <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '4px' }}>
-          {job.job_title || 'Unknown'}
-        </h2>
-        <div style={{ color: '#555', fontSize: '14px', marginBottom: '12px' }}>
-          {[job.company, normaliseLocation(job.location) ?? '\u2014']
-            .filter((x) => x != null && x !== '')
-            .join(' \u00b7 ')}
-        </div>
-
-        {job.website === 'linkedin' && job.post_datetime && (
-          <div className={s.modalDates}>
-            <div>
-              <span className={s.modalDateLabel}>
-                {isPromoted ? 'Originally posted:' : 'Posted:'}
-              </span>{' '}
-              {formatDateOnly(job.post_datetime)}
-            </div>
-          </div>
-        )}
-
-        <div className={s.applyRow}>
-          <a
-            href={job.job_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={s.applyManualBtn}
-          >
-            Apply Manually
-          </a>
-          <button type="button" disabled className={s.autoApplyBtn}>
-            Auto Apply
-          </button>
-        </div>
-        {(job.website === 'glassdoor' || job.website === 'indeed') && !job.easy_apply && (
-          <div className={s.applyNote}>
-            Opens the job listing page — click the apply button there to apply
-          </div>
-        )}
-
-        <hr style={{ border: 'none', borderTop: '1px solid #eee', marginBottom: '20px' }} />
-
-        <div className={s.jobDescription}>{job.job_description}</div>
-      </div>
     </div>
   )
 }
@@ -506,11 +363,16 @@ export default function JobsPage() {
         console.warn('[JHA] Scan All: could not fetch totals:', e?.message)
       }
 
+      const scanAllTotal = SCAN_WEBSITES.length
       for (let i = 0; i < SCAN_WEBSITES.length; i++) {
         const website = SCAN_WEBSITES[i]
         setCurrentScanWebsite(website)
         setScanAllWebsiteIdx(i)
-        await api.triggerScan(website)
+        await api.triggerScan(website, {
+          scan_all: true,
+          scan_all_position: i + 1,
+          scan_all_total: scanAllTotal,
+        })
         await new Promise((r) => setTimeout(r, 3000))
         const deadline = Date.now() + 30 * 60 * 1000
         while (Date.now() < deadline) {
@@ -732,50 +594,13 @@ export default function JobsPage() {
       {jobs.length > 0 && (
         <>
           <div className={s.jobGrid}>
-            {jobs.map(job => {
-              const isRemote = jobIsRemote(job)
-              const isIntern = jobIsInternship(job)
-              const isPromoted = jobIsPromotedGap(job)
-
-              return (
-                <div
-                  key={job.id}
-                  className={s.card}
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setSelectedJob(job)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      setSelectedJob(job)
-                    }
-                  }}
-                >
-                  <div className={s.badgeRow}>
-                    <WebsiteBadge website={job.website} />
-                    {isRemote && <span className={s.remoteBadge}>Remote</span>}
-                    {isIntern && <span className={s.internBadge}>Co-op/Intern</span>}
-                    {job.easy_apply && <span className={s.easyApplyBadge}>{'\u26a1'} Easy Apply</span>}
-                    {isPromoted && <span className={s.promotedBadge}>Promoted</span>}
-                  </div>
-                  <div className={s.cardTitle}>{job.job_title}</div>
-                  <div className={s.cardCompany}>{job.company}</div>
-                  <div className={s.cardLocation}>
-                    <>{'\ud83d\udccd'} <span className={s.location}>{normaliseLocation(job.location) ?? '\u2014'}</span></>
-                  </div>
-                  {job.website === 'linkedin' && job.post_datetime && (
-                    <div className={s.dateRow}>
-                      <span className={s.dateLabel}>
-                        {linkedInIsPromoted(job)
-                          ? <>Originally posted: {formatDateOnly(job.post_datetime)}</>
-                          : <>Posted: {formatDateOnly(job.post_datetime)}</>}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+            {jobs.map(job => (
+              <JobCard
+                key={job.id}
+                job={job}
+                onClick={() => setSelectedJob(job)}
+              />
+            ))}
           </div>
 
           {totalPages > 1 && (

@@ -4,9 +4,9 @@
 
 This extension automates scanning job search result pages on **LinkedIn** (`linkedin.com/jobs`), **Indeed Canada** (`ca.indeed.com/jobs`), and **Glassdoor Canada** (`glassdoor.ca` / `www.glassdoor.ca`), extracts job details, and **POST**s each job to the Job Hunting Assistant backend (`/jobs/ingest`) using the token and base URL stored in `chrome.storage.local`. **`GET /config`** supplies `config.website`, nested **`config.glassdoor`** (keyword/location slugs, filters), and Indeed/LinkedIn fields; **`background/scan_manual.js`** `handleManualScan(options)` uses **`effectiveWebsite`** (`options.websiteOverride` from **`GET /extension/pending-scan`** when set, else `config.website`, else `"linkedin"`) to choose URL builders (`buildSearchUrl` / `buildIndeedSearchUrl` / **`buildGlassdoorSearchUrl`**), **`scanConfig.website`**, and run-log `search_filters`.
 
-**Starting a scan (two paths):** (1) **Web app — Jobs page** — `POST /extension/trigger-scan` with body `{"website":"linkedin"}`, `{"website":"indeed"}`, or **`{"website":"glassdoor"}`** sets `scan_requested` and `scan_website` in the backend; **`background/poll.js`** polls **`GET /extension/pending-scan` every 3s** and calls `handleManualScan({ websiteOverride })` when `pending` is true (so e.g. LinkedIn can run even if `config.website` is `indeed`). The web app can also run **Scan All** (LinkedIn → Indeed → Glassdoor in series); each leg uses the same trigger path. (2) **Extension popup — Scan Now** — sends **`MANUAL_SCAN`** with no override; `handleManualScan()` runs with `effectiveWebsite` from config only.
+**Starting a scan (two paths):** (1) **Web app — Jobs page** — `POST /extension/trigger-scan` with body `{"website":"linkedin"|"indeed"|"glassdoor"}` (and optional **`scan_all`**, **`scan_all_position`**, **`scan_all_total`** for **Scan All**). The backend stores the request on **`extension_state`**; **`background/poll.js`** polls **`GET /extension/pending-scan` every 3s** and calls `handleManualScan({ websiteOverride, scan_all, scan_all_position, scan_all_total })` when `pending` is true. **Scan All** sends metadata so each run log row records position/total; the **backend** runs **sync dedup** only after the **last** site completes (not the extension). (2) **Extension popup — Scan Now** — sends **`MANUAL_SCAN`** with no override; `handleManualScan()` runs with `effectiveWebsite` from config only (no Scan All metadata).
 
-The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, and nested **`glassdoor`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history and detailed reports live in the **web app** (e.g. Search Report); the extension does not render those UIs.
+The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. **Dedup** runs on the server (`POST /jobs/dedup` or automatic after run completion when `dedup_mode` is sync). The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, nested **`glassdoor`**, **`dedup_mode`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history and dedup reports live in the **web app** (**Logs**); the extension does not render those UIs.
 
 ## Architecture
 
@@ -108,7 +108,7 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 
 | Function | Description |
 | --- | --- |
-| `handleManualScan(options)` | Optional `options.websiteOverride` (from poll when frontend triggers scan). Computes **`effectiveWebsite`** and uses it for **LinkedIn vs Indeed vs Glassdoor** branching (`isIndeed` / `isGlassdoor` / else LinkedIn), `scanConfig.website`, run-log `search_filters` (including **`website`**, **`general_date_posted`**, **`general_internship_only`**, **`general_remote_only`**), and search URL. Otherwise: clears `stopRequested`, removes `scanPageState`, returns early if a scan is already in progress. **First** PUTs **`/extension/state`** with **`stop_requested: false`** only (clears any stale stop flag from a prior run), **then** a second PUT with **`current_page: 1`** and **`today_searches: 0`**. Fetches config, calls `computeFtpr(config.f_tpr_bound)` for LinkedIn. Starts the run log via POST, then **`chrome.windows.create`** (`type: "popup"`, 1280×800, `focused: false`) with the search URL, stores **`tabId`** on `scanConfig` with `f_tpr`, `runId`, **`website: effectiveWebsite`**, full config including **`glassdoor`**, and initial `liveProgress`, calls `startKeepAlive()`, **90-minute** safety timeout. |
+| `handleManualScan(options)` | Optional **`websiteOverride`** (from poll). Optional **`scan_all`**, **`scan_all_position`**, **`scan_all_total`** — when `scan_all` is true, these are included on **`POST /extension/run-log/start`** so the backend can attach Scan All metadata to the run log. Computes **`effectiveWebsite`** and uses it for **LinkedIn vs Indeed vs Glassdoor** branching, `scanConfig.website`, run-log `search_filters`, and search URL. Clears `stopRequested`, removes `scanPageState`, returns early if a scan is already in progress. PUTs **`/extension/state`** (stop flag + page counters), fetches config, `computeFtpr` for LinkedIn. **`POST /extension/run-log/start`** with body above, then **`chrome.windows.create`**, stores `scanConfig` / `liveProgress`, **`startKeepAlive()`**, **90-minute** safety timeout. |
 
 ### `background/ingest.js`
 
@@ -140,7 +140,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `pollForScanTrigger()` | GETs `/extension/pending-scan`; the backend **atomically** read-and-clears the `scan_requested` flag and returns `website` (optional override). If `pending`, calls `handleManualScan({ websiteOverride: data.website or null })`. |
+| `pollForScanTrigger()` | GETs `/extension/pending-scan`; the backend **atomically** read-and-clears the pending scan and returns **`website`**, **`scan_all`**, **`scan_all_position`**, **`scan_all_total`**. If `pending`, calls `handleManualScan({ websiteOverride, scan_all, scan_all_position, scan_all_total })`. |
 | `pollForStopTrigger()` | GETs `/extension/pending-stop`; the backend **atomically** read-and-clears `stop_requested`. If `pending`, sets `stopRequested`, **`chrome.tabs.remove(scanConfig.tabId)`** if present, clears scan-related storage (`scanInProgress`, `scanConfig`, `scanPageState`, `liveProgress`, …), clears the **90-minute** timeout id, calls **`stopKeepAlive()`** — in addition to content scripts seeing `stopRequested`. |
 
 ### `background/startup.js`
@@ -198,7 +198,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | --- | --- |
 | `getCsrfToken()` | Extracts CSRF token from `JSESSIONID` cookie for Voyager requests. |
 | `fetchCompanyName(companyUrn, csrfToken)` | Fetches company display name from Voyager entities API; wrapped in **`Promise.race` with a 3s timeout** so a hung fetch does not block the scan indefinitely. |
-| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Minimum JD length **50** chars (trimmed). **429** → 60s pause then `null`. Omits **`voyager_raw`** from ingest payloads. |
+| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Accepts any **non-empty** trimmed JD text. **429** → 60s pause then `null`. Omits **`voyager_raw`** from ingest payloads. |
 
 ### `content/linkedin/process.js`
 
@@ -211,7 +211,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `runSinglePage(config, state, processedJobIds, processedTitleCompany)` | After **`waitForCards`**: skip duplicate **`job_id`**; **`extractCardData`**; from **page 2+**, skip if **`title|company`** (lowercased) already seen (promoted cards with new ids per page). **`processCard(..., cardData)`** to avoid double extraction. Persists **`processed_job_ids`** + **`processed_title_company`** in **`scanPageState`**. Duplicate early-stop, bottom scroll, **`NAVIGATE_SCAN_TAB`**. |
+| `runSinglePage(config, state, processedJobIds)` | After **`waitForCards`**: skip duplicate **`job_id`**; **`extractCardData`**; **`processCard(..., cardData)`**. Persists **`processed_job_ids`** in **`scanPageState`**. Bottom scroll, **`NAVIGATE_SCAN_TAB`** for multi-page scans. |
 
 ### `content/linkedin/overlay.js`
 
@@ -239,7 +239,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `fetchIndeedJD(jk)` | Indeed JD extraction via **`apis.indeed.com/graphql`** with a **10s `AbortController`** timeout. **`oneGraphApiKey`** is read from the page via **`GET_MAIN_WORLD_VALUE`** (background uses **`chrome.scripting.executeScript`** in the **MAIN** world — only for the key, not from `process.js`). Returns `{ jd }`, `{ rateLimited: true }`, `{ phantom: true }` (timeout / HTTP / GraphQL / empty job / short JD), or `null` if no API key. |
+| `fetchIndeedJD(jk)` | Indeed JD extraction via **`apis.indeed.com/graphql`** with a **10s `AbortController`** timeout. **`oneGraphApiKey`** is read from the page via **`GET_MAIN_WORLD_VALUE`**. Returns `{ jd }` when text is non-empty after trim, `{ rateLimited: true }`, `{ phantom: true }` (timeout / HTTP / GraphQL / empty job), or `null` if no API key. |
 
 ### `content/indeed/fetch_jd.js`
 
@@ -298,7 +298,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `scanGlassdoorPage(config, runId)` | Finds cards, loops with **`CHECK_STOP`**, **`processGlassdoorCard`**, inter-card pacing (**`interCardPacingMs`**), early stop on consecutive duplicates, optional rate-limit cooldowns. |
+| `scanGlassdoorPage(config, runId)` | Finds cards, loops with **`CHECK_STOP`**, **`processGlassdoorCard`**, inter-card pacing (**`interCardPacingMs`**), optional rate-limit cooldowns. |
 
 ### `content/glassdoor/init.js`
 
@@ -330,9 +330,9 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 ## Data Flow
 
 1. **Scan start** — either:
-   - **Web app:** user clicks **Scan LinkedIn**, **Scan Indeed**, or **Scan Glassdoor** → backend **`POST /extension/trigger-scan`** with `{"website":"linkedin"|"indeed"|"glassdoor"}` → on the next poll, **`pollForScanTrigger()`** receives `pending` and calls `handleManualScan({ websiteOverride })`, **or**
-   - **Popup:** user clicks **Scan Now** → `popup.js` sends `{ type: "MANUAL_SCAN" }` via `chrome.runtime.sendMessage` → **`handleManualScan()`** with no override (site comes from `config.website`).
-2. `background/scan_manual.js` `handleManualScan()` clears `scanPageState`, **PUT**s **`stop_requested: false`** then page counters, GETs config, runs `computeFtpr` for LinkedIn, POSTs run log start, builds the search URL, then opens a **popup window** (`chrome.windows.create`) and stores `scanConfig` (including **`tabId`**) / `liveProgress`, arms the **90-minute** safety timeout. URL: **`buildSearchUrl`** / **`buildIndeedSearchUrl`** / **`buildGlassdoorSearchUrl`**.
+   - **Web app:** user clicks **Scan LinkedIn**, **Scan Indeed**, or **Scan Glassdoor** → **`POST /extension/trigger-scan`** with `website` only; **Scan All** also sends **`scan_all`**, **`scan_all_position`**, **`scan_all_total`**. On the next poll, **`pollForScanTrigger()`** calls `handleManualScan` with override + Scan All fields. **or**
+   - **Popup:** user clicks **Scan Now** → `popup.js` sends `{ type: "MANUAL_SCAN" }` → **`handleManualScan()`** with no override (site from `config.website`).
+2. `background/scan_manual.js` `handleManualScan()` clears `scanPageState`, **PUT**s extension state, GETs config, **`POST /extension/run-log/start`** (including **`scan_all`** fields when present), builds the search URL, opens a **popup window**, stores `scanConfig` / `liveProgress`, **90-minute** safety timeout.
 3. **LinkedIn:** `init()` → `runSinglePage()` → job ids from **`data-occludable-job-id`** + Voyager + **`ingestJob`**. **Indeed:** `init()` runs **`ensureIndeedRunLog`** when needed, then loops **`processCard()`** over result cards. **Glassdoor:** `glassdoorMain()` waits for **`scanInProgress`** + **`scanConfig.website === "glassdoor"`**, then **`scanGlassdoorPage()`** → **`processGlassdoorCard()`** (single SERP page; completion via **`scanComplete`** like other sites).
 4. **LinkedIn:** `fetchJDViaVoyager()` → Voyager APIs → `ingestJob()` sends `{ type: "INGEST_JOB", job }`. **Indeed:** `fetchIndeedJD()` in **`rate_strategy.js`** (GraphQL + **10s** abort) → same `ingestJob()` path. **Glassdoor:** `fetchGlassdoorJD()` (job-listing HTML + **`__NEXT_DATA__`**) → **`processGlassdoorCard`** sends `{ type: "INGEST_JOB", job }` directly (does not use `shared/messaging.js`).
 5. `background/ingest.js` `handleIngest()` POSTs to `/jobs/ingest`; the backend persists the job.

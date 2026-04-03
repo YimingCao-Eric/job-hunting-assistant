@@ -51,17 +51,7 @@ async function init() {
     const processedJobIds = new Set(
       Array.isArray(state.processed_job_ids) ? state.processed_job_ids : []
     );
-    const processedTitleCompany = new Set(
-      Array.isArray(state.processed_title_company)
-        ? state.processed_title_company
-        : []
-    );
-    summary = await runSinglePage(
-      config,
-      state,
-      processedJobIds,
-      processedTitleCompany
-    );
+    summary = await runSinglePage(config, state, processedJobIds);
 
     if (summary.done) {
       hideScanOverlay();

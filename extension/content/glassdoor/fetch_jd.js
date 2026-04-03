@@ -148,6 +148,10 @@ function extractJsonLdJobPostingMeta(htmlOrDoc) {
 /**
  * Rendered job description from DOM (preferred over stripped plain fragments).
  */
+function hasJdText(jd) {
+  return jd != null && String(jd).trim().length > 0;
+}
+
 function jdFromRenderedDom(doc) {
   const descEl = doc.querySelector(
     '[class*="JobDetails_jobDescription"], [data-test="jobDescriptionContent"], ' +
@@ -213,7 +217,7 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       };
 
       let jd = jdFromRenderedDom(doc);
-      if (!jd || jd.length < 100) {
+      if (!hasJdText(jd)) {
         const jobPosting = extractFirstJobPostingFromDoc(doc);
         const rawDesc = jobPosting?.description;
         if (rawDesc) {
@@ -228,7 +232,7 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       }
 
       // Strategy: __NEXT_DATA__ (most reliable — Glassdoor is Next.js)
-      if (!jd || jd.length < 100) {
+      if (!hasJdText(jd)) {
         const nextMatch = html.match(
           /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
         );
@@ -245,7 +249,7 @@ async function fetchGlassdoorJD(jobUrl, jl) {
               const clean = desc.includes("<")
                 ? stripHtmlToStructuredText(desc)
                 : String(desc).replace(/\s+/g, " ").trim();
-              if (clean.length >= 100) {
+              if (hasJdText(clean)) {
                 jd = clean;
               }
             }
@@ -256,7 +260,7 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       }
 
       // Strategy: first JSON-LD script block (regex — may differ from ld+json order)
-      if (!jd || jd.length < 100) {
+      if (!hasJdText(jd)) {
         const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
         if (ldMatch) {
           try {
@@ -266,7 +270,7 @@ async function fetchGlassdoorJD(jobUrl, jl) {
               const clean = desc.includes("<")
                 ? stripHtmlToStructuredText(desc)
                 : String(desc).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-              if (clean.length >= 100) {
+              if (hasJdText(clean)) {
                 const loc = locationFromJobPosting(d) || locationFromLd;
                 return withMeta({ jd: clean, easy_apply: easyApplyFromLd, location: loc });
               }
@@ -278,20 +282,20 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       }
 
       // Strategy: DOM plain text fallback
-      if (!jd || jd.length < 100) {
+      if (!hasJdText(jd)) {
         const el = doc.querySelector(
           '[class*="JobDetails_jobDescription"], [data-test="jobDescriptionContent"], #JobDescriptionContainer'
         );
         if (el) {
           const clean = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-          if (clean.length >= 100) {
+          if (hasJdText(clean)) {
             jd = clean;
           }
         }
       }
 
-      if (jd && jd.length >= 100) {
-        return withMeta({ jd, easy_apply: easyApplyFromLd });
+      if (hasJdText(jd)) {
+        return withMeta({ jd: String(jd).trim(), easy_apply: easyApplyFromLd });
       }
 
       console.warn(`[JHA-Glassdoor] fetch_jd: no JD found for jl=${jl} url=${safeUrl}`);

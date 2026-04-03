@@ -262,3 +262,66 @@
   color: #888;
   margin-right: 6px;
 }
+
+.dedupTriggerPill {
+  font-size: 12px;
+  color: #555;
+}
+
+.dedupTreeLine {
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.dedupSectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+  letter-spacing: 0.06em;
+  margin: 14px 0 8px;
+}
+
+.dedupGateTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.dedupGateTable th,
+.dedupGateTable td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #eee;
+}
+
+.dedupGateTable th {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888;
+}
+
+.gateRowMuted {
+  opacity: 0.45;
+}
+
+.dedupReasonBlock {
+  font-size: 13px;
+  color: #333;
+}
+
+.dedupReasonLine {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.dedupReasonKey {
+  font-family: ui-monospace, monospace;
+  color: #555;
+}
+
+.dedupReasonVal {
+  font-weight: 600;
+}
