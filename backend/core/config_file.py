@@ -26,5 +26,6 @@ async def read_config_file() -> dict:
 
 
 async def write_config_file(data: dict) -> None:
+    _config_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiofiles.open(_config_path, "w", encoding="utf-8") as f:
         await f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")

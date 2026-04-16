@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
 
 
 class ScrapedJobIngest(BaseModel):
@@ -60,9 +60,9 @@ class ScrapedJobRead(BaseModel):
     req_coverage: float | None = None
     confidence: str | None = None
     match_skip_reason: str | None = None
-    required_skills: dict | None = None
-    nice_to_have_skills: dict | None = None
-    critical_skills: dict | None = None
+    required_skills: dict | list | None = None
+    nice_to_have_skills: dict | list | None = None
+    critical_skills: dict | list | None = None
     extracted_yoe: float | None = None
     salary_min_extracted: float | None = None
     salary_max_extracted: float | None = None
@@ -71,6 +71,33 @@ class ScrapedJobRead(BaseModel):
     job_type: str | None = None
     jd_incomplete: bool
     matched_at: datetime | None = None
+
+    other_notes: str | None = None
+    education_req_degree: str | None = None
+    education_req_field: str | None = None
+    education_field_qualified: bool | None = None
+    visa_req: str | None = None
+    blocking_gap: str | None = None
+    gap_adjacency: dict | list | None = None
+    matching_mode: str | None = None
+    removal_stage: str | None = None
+
+    has_report: bool = False
+
+    @computed_field
+    @property
+    def extracted_salary_min(self) -> float | None:
+        return self.salary_min_extracted
+
+    @computed_field
+    @property
+    def extracted_salary_max(self) -> float | None:
+        return self.salary_max_extracted
+
+    @computed_field
+    @property
+    def match_confidence(self) -> str | None:
+        return self.confidence
 
 
 class JobsListResponse(BaseModel):
@@ -94,17 +121,26 @@ class JobUpdate(BaseModel):
     fit_score: float | None = None
     match_level: str | None = None
     match_reason: str | None = None
-    required_skills: dict | None = None
-    nice_to_have_skills: dict | None = None
-    critical_skills: dict | None = None
+    required_skills: dict | list | None = None
+    nice_to_have_skills: dict | list | None = None
+    critical_skills: dict | list | None = None
     extracted_yoe: float | None = None
     seniority_level: str | None = None
     job_type: str | None = None
     remote_type: str | None = None
     salary_min_extracted: float | None = None
-    salary_max_extracted: float | None = None
+    extracted_salary_min: float | None = None
     confidence: str | None = None
+    match_confidence: str | None = None
     req_coverage: float | None = None
     matched_at: datetime | None = None
     jd_incomplete: bool | None = None
     match_skip_reason: str | None = None
+    other_notes: str | None = None
+    education_req_degree: str | None = None
+    education_req_field: str | None = None
+    education_field_qualified: bool | None = None
+    visa_req: str | None = None
+    blocking_gap: str | None = None
+    gap_adjacency: dict | list | None = None
+    matching_mode: str | None = None

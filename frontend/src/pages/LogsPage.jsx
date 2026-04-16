@@ -25,6 +25,19 @@ const SKIP_LABELS = {
   already_scraped: 'Already scraped (dedup)',
 }
 
+function reportTypeLabel(type) {
+  const E = String.fromCodePoint
+  const labels = {
+    match_level: `${E(0x26a1)} Match level`,
+    yoe: `${E(0x1f4c5)} YOE`,
+    missing_skills: `${E(0x1f50d)} Missing skills`,
+    false_skills: `${E(0x274c)} False skills`,
+    wrong_gate: `${E(0x1f6aa)} Wrong gate`,
+    other: `${E(0x1f4ac)} Other`,
+  }
+  return labels[type] || type
+}
+
 function formatDuration(started_at, completed_at) {
   if (!completed_at) return 'in progress'
   const diff = new Date(completed_at) - new Date(started_at)
@@ -148,6 +161,92 @@ function formatDedupTrigger(t) {
   if (t === 'post_scan') return 'Post-scan'
   if (t === 'sync_pass2') return 'Sync'
   return t || '\u2014'
+}
+
+function formatMatchReportMode(mode) {
+  const map = {
+    cpu: 'Legacy extract',
+    llm: 'Legacy extract (LLM)',
+    cpu_work: 'CPU work',
+    llm_extraction_gates: 'LLM extraction + gates',
+    cpu_score: 'CPU score',
+    llm_score: 'LLM score',
+  }
+  return map[mode] || mode || '\u2014'
+}
+
+function MatchReportCard({ report, open, onToggle }) {
+  const cpuFb = report.total_cpu_fallback ?? 0
+  return (
+    <div className={s.runCard}>
+      <div
+        className={s.runHeader}
+        onClick={onToggle}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+        role="button"
+        tabIndex={0}
+      >
+        <span className={s.runSite}>{'\u2696'} Match</span>
+        <span className={s.runTime}>
+          {report.created_at ? formatAbsoluteTime(report.created_at) : '\u2014'}
+        </span>
+        <span className={s.dedupTriggerPill}>{formatMatchReportMode(report.matching_mode)}</span>
+        <span className={s.runStatus}>completed</span>
+        <span className={s.chevron}>{open ? '\u25bc' : '\u25b6'}</span>
+      </div>
+
+      {open && (
+        <div className={s.runBody}>
+          <div className={s.section}>
+            <div className={s.sectionTitle}>Run</div>
+            <div className={s.configLine}>
+              <span className={s.configLabel}>Trigger:</span>
+              {report.trigger || '\u2014'}
+            </div>
+          </div>
+          <div className={s.section}>
+            <div className={s.sectionTitle}>Counts</div>
+            <div className={s.statRow}>
+              <div className={s.statItem}>
+                <span className={s.statLabel}>Processed</span>
+                <span className={s.statValue}>{report.total_processed ?? 0}</span>
+              </div>
+              <div className={s.statItem}>
+                <span className={s.statLabel}>Gate skipped</span>
+                <span className={s.statValue}>{report.total_gate_skipped ?? 0}</span>
+              </div>
+              <div className={s.statItem}>
+                <span className={s.statLabel}>Failed</span>
+                <span
+                  className={s.statValue}
+                  style={{ color: (report.total_failed ?? 0) > 0 ? 'rgb(192,57,43)' : undefined }}
+                >
+                  {report.total_failed ?? 0}
+                </span>
+              </div>
+              {cpuFb > 0 && (
+                <div className={s.statItem}>
+                  <span className={s.statLabel}>CPU fallback</span>
+                  <span className={s.statValue} style={{ color: '#cc8800' }}>
+                    {cpuFb}
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className={s.configLine} style={{ marginTop: 8 }}>
+              <span className={s.configLabel}>Duration:</span>
+              {formatGateTimeMs(report.duration_ms)}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function DedupReportCard({ report, open, onToggle }) {
@@ -537,9 +636,35 @@ export default function LogsPage() {
   const [dedupError, setDedupError] = useState(null)
   const [openDedupIds, setOpenDedupIds] = useState(() => new Set())
 
+  const [matchReports, setMatchReports] = useState([])
+  const [matchLoading, setMatchLoading] = useState(false)
+  const [matchError, setMatchError] = useState(null)
+  const [openMatchIds, setOpenMatchIds] = useState(() => new Set())
+
+  const [reports, setReports] = useState([])
+  const [reportsTotal, setReportsTotal] = useState(0)
+  const [reportsLoading, setReportsLoading] = useState(false)
+  const [reportStats, setReportStats] = useState(null)
+  const [reportsStatusFilter, setReportsStatusFilter] = useState('pending')
+
   useEffect(() => {
     originalByIdRef.current = originalById
   }, [originalById])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const stats = await api.getJobReportStats()
+        if (!cancelled) setReportStats(stats)
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -577,6 +702,53 @@ export default function LogsPage() {
   }, [logSource])
 
   useEffect(() => {
+    if (logSource !== 'matching') return undefined
+    let cancelled = false
+    ;(async () => {
+      setMatchLoading(true)
+      setMatchError(null)
+      try {
+        const data = await api.getMatchReports()
+        if (!cancelled) setMatchReports(Array.isArray(data) ? data : [])
+      } catch {
+        if (!cancelled) setMatchError('Failed to load match reports.')
+      } finally {
+        if (!cancelled) setMatchLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [logSource])
+
+  useEffect(() => {
+    if (logSource !== 'reports') return undefined
+    let cancelled = false
+    ;(async () => {
+      setReportsLoading(true)
+      try {
+        const [data, stats] = await Promise.all([
+          api.getJobReports({ status: reportsStatusFilter }),
+          api.getJobReportStats(),
+        ])
+        if (!cancelled) {
+          setReports(Array.isArray(data.items) ? data.items : [])
+          setReportsTotal(data.total ?? 0)
+          setReportStats(stats)
+        }
+      } catch {
+        if (!cancelled) {
+          setReports([])
+          setReportsTotal(0)
+        }
+      } finally {
+        if (!cancelled) setReportsLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [logSource, reportsStatusFilter])
+
+  useEffect(() => {
     if (!runs.length) return
     setOpenIds(prev => {
       if (prev.size > 0) return prev
@@ -602,6 +774,26 @@ export default function LogsPage() {
       else next.add(id)
       return next
     })
+  }, [])
+
+  const toggleMatch = useCallback(id => {
+    setOpenMatchIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const handleDismissReport = useCallback(async (reportId) => {
+    try {
+      await api.actionJobReport(reportId, { action: 'dismiss' })
+      setReports((prev) => prev.filter((r) => r.id !== reportId))
+      const stats = await api.getJobReportStats()
+      setReportStats(stats)
+    } catch (e) {
+      console.error(e)
+    }
   }, [])
 
   const loadSkippedForRun = useCallback(async runId => {
@@ -652,6 +844,21 @@ export default function LogsPage() {
             onClick={() => setLogSource('dedup')}
           >
             Dedup
+          </button>
+          <button
+            type="button"
+            className={`${j.filterTab} ${logSource === 'matching' ? j.filterTabActive : ''}`}
+            onClick={() => setLogSource('matching')}
+          >
+            Matching
+          </button>
+          <button
+            type="button"
+            className={`${j.filterTab} ${logSource === 'reports' ? j.filterTabActive : ''}`}
+            onClick={() => setLogSource('reports')}
+          >
+            Reports
+            {reportStats?.pending > 0 ? ` (${reportStats.pending})` : ''}
           </button>
         </div>
       </div>
@@ -711,6 +918,166 @@ export default function LogsPage() {
               />
             ))}
         </>
+      )}
+
+      {logSource === 'matching' && (
+        <>
+          {matchLoading && (
+            <div style={{ padding: '2rem 0' }}>
+              <Spinner />
+            </div>
+          )}
+          {matchError && <p style={{ color: '#c0392b' }}>{matchError}</p>}
+          {!matchLoading && !matchError && matchReports.length === 0 && (
+            <p style={{ color: '#666' }}>No match reports yet.</p>
+          )}
+          {!matchLoading &&
+            matchReports.map(report => (
+              <MatchReportCard
+                key={report.id}
+                report={report}
+                open={openMatchIds.has(String(report.id))}
+                onToggle={() => toggleMatch(String(report.id))}
+              />
+            ))}
+        </>
+      )}
+
+      {logSource === 'reports' && (
+        <div className={s.reportsSection}>
+          <div className={s.reportStatusFilter}>
+            {['pending', 'actioned', 'dismissed'].map((st) => (
+              <button
+                key={st}
+                type="button"
+                className={
+                  reportsStatusFilter === st ? s.reportFilterTabActive : s.reportFilterTab
+                }
+                onClick={() => setReportsStatusFilter(st)}
+              >
+                {st.charAt(0).toUpperCase() + st.slice(1)}
+                {st === 'pending' && reportStats?.pending > 0
+                  ? ` (${reportStats.pending})`
+                  : ''}
+              </button>
+            ))}
+          </div>
+
+          {reportsLoading && (
+            <div style={{ padding: '2rem 0' }}>
+              <Spinner />
+            </div>
+          )}
+
+          {!reportsLoading
+            && reports.map((r) => (
+              <div key={r.id} className={s.reportCard}>
+                <div className={s.reportHeader}>
+                  <span
+                    className={`${s.reportTypeBadge} ${s[`type_${r.report_type}`] || ''}`}
+                  >
+                    {reportTypeLabel(r.report_type)}
+                  </span>
+                  <span className={s.reportJobTitle}>
+                    {r.job_title}
+                    {' '}
+                    @
+                    {' '}
+                    {r.company || '—'}
+                  </span>
+                  <span className={s.reportDate}>
+                    {new Date(r.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+
+                <div className={s.reportDetail}>
+                  {r.match_level && (
+                    <span className={s.reportMeta}>Current level: {r.match_level}</span>
+                  )}
+                  {r.match_skip_reason && (
+                    <span className={s.reportMeta}>
+                      Removed by:
+                      {' '}
+                      {r.match_skip_reason}
+                    </span>
+                  )}
+                  {r.detail?.suggested_level && (
+                    <span className={s.reportDetailLine}>
+                      {'\u2192'}
+                      {' '}
+                      Should be:
+                      {' '}
+                      {r.detail.suggested_level}
+                    </span>
+                  )}
+                  {r.detail?.actual_yoe != null && (
+                    <span className={s.reportDetailLine}>
+                      {'\u2192'}
+                      {' '}
+                      Actual YOE:
+                      {' '}
+                      {r.detail.actual_yoe}
+                      {' '}
+                      years
+                    </span>
+                  )}
+                  {r.detail?.skills?.length > 0 && (
+                    <span className={s.reportDetailLine}>
+                      {'\u2192'}
+                      {' '}
+                      Skills:
+                      {' '}
+                      {r.detail.skills.join(', ')}
+                    </span>
+                  )}
+                  {r.detail?.gate_name && (
+                    <span className={s.reportDetailLine}>
+                      {'\u2192'}
+                      {' '}
+                      Gate:
+                      {' '}
+                      {r.detail.gate_name}
+                    </span>
+                  )}
+                  {r.detail?.note && (
+                    <span className={s.reportNoteText}>Note: {r.detail.note}</span>
+                  )}
+                </div>
+
+                {r.status === 'pending' && (
+                  <div className={s.reportActions}>
+                    <button
+                      type="button"
+                      className={s.reportActionBtn}
+                      onClick={() =>
+                        window.open(`/matching?job=${encodeURIComponent(r.job_id)}`, '_blank')
+                      }
+                    >
+                      View job {'\u2197'}
+                    </button>
+                    <span className={s.reportActionsSoon}>Actions coming soon</span>
+                    <button
+                      type="button"
+                      className={s.reportDismissBtn}
+                      onClick={() => handleDismissReport(r.id)}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+
+          {!reportsLoading && reports.length === 0 && (
+            <p className={s.reportsEmptyState}>
+              No
+              {' '}
+              {reportsStatusFilter}
+              {' '}
+              reports.
+            </p>
+          )}
+        </div>
       )}
     </div>
   )

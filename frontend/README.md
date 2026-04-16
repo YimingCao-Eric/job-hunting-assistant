@@ -1,6 +1,6 @@
 # Job Hunting Assistant — Frontend
 
-Single-page app for **search configuration**, **job list**, **run logs** (scan + dedup reports), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth.
+Single-page app for **search configuration**, **profile / resume**, **job list**, **run logs** (scan runs, dedup reports, pipeline match reports, and **issue reports**), **skill candidate review**, **matching pipeline** (dedup + extraction + gates + CPU score), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth.
 
 For Docker-based full-stack setup, see the [repository root README](../README.md).
 
@@ -27,13 +27,18 @@ frontend/
 │   ├── api.js           Central fetch wrapper (VITE_API_URL, VITE_AUTH_TOKEN)
 │   ├── pages/
 │   │   ├── ConfigPage.jsx
+│   │   ├── ProfilePage.jsx     Resume upload, parsed profile, skills
 │   │   ├── JobsPage.jsx        Scans, Scan All, job grid, filters
-│   │   ├── LogsPage.jsx        Search runs + expandable dedup reports
+│   │   ├── LogsPage.jsx        Search runs; Dedup reports; Matching run reports; **Reports** (issue reports from Matching)
+│   │   ├── SkillsPage.jsx      Skill alias candidates (approve / merge / reject)
+│   │   ├── MatchingPage.jsx    Pipeline buttons (CPU / LLM / score), filters, job grid, **report flag** per card
 │   │   └── DedupPage.jsx       Dedup mode, run/reset, filter pills, job grid
 │   ├── components/
 │   │   ├── PageTitle.jsx, Spinner.jsx, JobCard.jsx, JobModal.jsx
-│   │   └── DedupSkipBadge.jsx  Skip reason + lazy fetch for dedup_original_job
+│   │   ├── DedupSkipBadge.jsx  Dedup skip reason + lazy fetch for dedup_original_job
+│   │   ├── MatchBadge.jsx, MatchSkipBadge.jsx  Match level / gate skip UI
 │   └── utils/
+│       ├── glassdoorUrl.js   Glassdoor SERP / job URL helpers
 │       ├── location.js
 │       ├── runLog.js
 │       └── time.js
@@ -44,12 +49,15 @@ frontend/
 
 | Path | Page |
 | --- | --- |
-| `/` | Config — search config, dedup mode, site filters, URL previews |
+| `/` | Config — search config, dedup mode, LLM toggle, site filters, URL previews |
+| `/profile` | Profile — resume upload, parsed fields, skills for matching |
 | `/jobs` | Jobs — list, filters, scans (LinkedIn / Indeed / Glassdoor / **Scan All**), progress |
-| `/logs` | Logs — **Search** tab (extension run logs) and **Dedup** tab (dedup reports) |
+| `/logs` | Logs — **Search** (run logs), **Dedup**, **Matching** (pipeline run metrics), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
+| `/skills` | Skills — review skill alias candidates from JD extraction |
+| `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score; removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**) |
 | `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters |
 
-Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/dedup`** (redirects).
+Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/matching`** (redirects).
 
 The extension popup only syncs a **subset** of fields; use **Config** for full control (`website`, Glassdoor, `dedup_mode`, etc.).
 
@@ -97,19 +105,38 @@ The `api` object exports methods (all requests use the shared `Authorization` he
 | Method | Purpose |
 | --- | --- |
 | `getConfig` / `updateConfig` | `/config` |
-| `getJobs` | `GET /jobs` |
+| `getJobs` | `GET /jobs` (items include **`has_report`**) |
 | `getJob` / `getJobsByDedupStatus` | Job detail and dedup-filtered lists |
+| `createJobReport` | `POST /jobs/{id}/report` |
+| `getJobReports` | `GET /jobs/reports` |
+| `getJobReportStats` | `GET /jobs/reports/stats` |
+| `actionJobReport` | `PUT /jobs/reports/{id}/action` |
 | `resetDedup` | `POST /jobs/dedup/reset` |
 | `runDedup` | `POST /jobs/dedup` |
 | `getDedupReports` | `GET /dedup/reports` |
+| `getDedupReport` | `GET /dedup/reports/{id}` |
 | `triggerScan(website, extra?)` | `POST /extension/trigger-scan` — optional **`extra`** for Scan All (`scan_all`, `scan_all_position`, `scan_all_total`) |
 | `stopScan` | `POST /extension/trigger-stop` |
 | `getRunLogs` | `GET /extension/run-log` |
 | `getExtensionState` | `GET /extension/state` |
+| `runMatching` | `POST /jobs/match` — body `{ mode?: 'cpu_only' \| 'llm_extraction_gates' \| 'cpu_score' }`; returns **`{ status: 'started', mode }`** immediately |
+| `getMatchReports` / `getMatchReport` | `GET /match/reports`, `/match/reports/{id}` |
+| `getMatchExtractedCount` | `GET /jobs/match/extracted-count` |
+| `getMatchLogs` | `GET /match/logs` |
+| `runGates`, `scoreJobs`, `resetGates`, `resetScore`, `resetExtraction` | Other `/jobs/match/*` helpers |
+| `undoButton1` … `undoButton3`, `dismissJob`, `undismissJob` | Pipeline undo + dismiss endpoints |
+| `getProfile`, `saveProfile`, `uploadResume`, `parseResume`, `getProfileExtracted` | `/profile` |
+| `getSkillCandidates`, `getSkillCandidateStats`, `approveSkillCandidate`, `mergeSkillCandidate`, `rejectSkillCandidate`, `refreshSkillAliases` | `/skills/candidates/*` |
+
+**Matching page polling:** After **`runMatching`**, the API finishes work in the background. The UI polls **`getMatchReports`** until the report count increases (or times out after two minutes) so the request does not block on large batches.
 
 ## Scan All (Jobs page)
 
 **Scan All** loops `linkedin` → `indeed` → `glassdoor` and calls **`triggerScan(website, { scan_all: true, scan_all_position, scan_all_total })`** so the backend can run **sync dedup** only after the **last** site completes. Single-site buttons call **`triggerScan('linkedin')`** (etc.) with no extra payload.
+
+## Dedup chain repair (optional)
+
+The backend exposes **`POST /jobs/dedup/resolve-chains`** to fix rows where **`dedup_original_job_id`** still points at another removed job (one-time / idempotent DB repair). Call it with the same bearer auth as other endpoints (e.g. `curl`); it is not wrapped in `api.js` by default.
 
 ## Linting
 

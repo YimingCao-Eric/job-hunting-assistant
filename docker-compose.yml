@@ -3,8 +3,13 @@ services:
     build: ./backend
     ports: ["8000:8000"]
     env_file: .env
+    environment:
+      - CONFIG_PATH=/app/data/config.json
+      - PROFILE_PATH=/app/data/profile.json
     volumes:
-      - ./config.json:/app/config.json
+      # Persist profile + search config on the host (survives image rebuilds).
+      # Create ./data before first up, or Docker will create it (may be root-owned on Linux).
+      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy

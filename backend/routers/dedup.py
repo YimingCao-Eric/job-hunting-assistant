@@ -20,6 +20,8 @@ DEDUP_SERVICE_SKIP_REASONS = (
     "language",
     "job_type",
     "blacklisted",
+    "blacklisted_company",
+    "blacklisted_location",
     "title_blacklisted",
     "agency",
     "title_mismatch",

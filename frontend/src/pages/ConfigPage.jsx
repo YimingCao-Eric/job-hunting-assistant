@@ -50,9 +50,13 @@ const DEFAULTS = {
   needs_sponsorship: false,
   no_agency: false,
   dedup_fuzzy_threshold: 85,
+  llm: false,
+  nth_bonus_weight: 0.10,
+  cpu_strong_threshold: 0.85,
+  cpu_binary_threshold: 0.50,
 }
 
-const TAB_IDS = /** @type {const} */ (['general', 'linkedin', 'indeed', 'glassdoor', 'dedup'])
+const TAB_IDS = /** @type {const} */ (['general', 'linkedin', 'indeed', 'glassdoor', 'dedup', 'matching'])
 
 function parseCsv(s) {
   return String(s ?? '')
@@ -265,6 +269,13 @@ export default function ConfigPage() {
           no_agency: data.no_agency === true,
           dedup_fuzzy_threshold:
             data.dedup_fuzzy_threshold != null ? Number(data.dedup_fuzzy_threshold) : 85,
+          llm: data.llm === true,
+          nth_bonus_weight:
+            data.nth_bonus_weight != null ? Number(data.nth_bonus_weight) : 0.10,
+          cpu_strong_threshold:
+            data.cpu_strong_threshold != null ? Number(data.cpu_strong_threshold) : 0.85,
+          cpu_binary_threshold:
+            data.cpu_binary_threshold != null ? Number(data.cpu_binary_threshold) : 0.50,
         }
         setConfig(next)
       })
@@ -369,6 +380,10 @@ export default function ConfigPage() {
         f_job_type: emptyToNull(config.f_job_type),
         f_remote: emptyToNull(config.f_remote),
         salary_min: parseInt(config.salary_min, 10) || 0,
+        llm: config.llm === true,
+        nth_bonus_weight: Number(config.nth_bonus_weight) || 0.10,
+        cpu_strong_threshold: Number(config.cpu_strong_threshold) || 0.85,
+        cpu_binary_threshold: Number(config.cpu_binary_threshold) || 0.50,
         glassdoor: {
           keyword: gd_keyword_final,
           location: gd_location_final,
@@ -434,6 +449,7 @@ export default function ConfigPage() {
                     {id === 'indeed' && 'Indeed'}
                     {id === 'glassdoor' && 'Glassdoor'}
                     {id === 'dedup' && 'Dedup'}
+                    {id === 'matching' && 'Matching'}
                   </button>
                 ))}
               </div>
@@ -463,20 +479,6 @@ export default function ConfigPage() {
                       placeholder="e.g. Canada"
                       required
                     />
-                  </div>
-                  <div className={s.field}>
-                    <label className={s.label}>Minimum salary (annual)</label>
-                    <input
-                      className={s.input}
-                      type="number"
-                      min={0}
-                      value={config.salary_min}
-                      onChange={e => set('salary_min', e.target.value)}
-                      placeholder="0 = no filter"
-                    />
-                    <span className={s.hint}>
-                      Annual salary in dollars (e.g. 80000). Use commas for readability.
-                    </span>
                   </div>
                   <div className={s.field}>
                     <label className={s.label}>Date posted (days ago)</label>
@@ -1028,6 +1030,122 @@ export default function ConfigPage() {
                         saveDedup({ dedup_fuzzy_threshold: config.dedup_fuzzy_threshold })}
                     />
                     <span className={s.hint}>0 to disable cosine similarity matching</span>
+                  </div>
+                </Fragment>
+              )}
+
+              {activeTab === 'matching' && (
+                <Fragment>
+                  <div className={s.field}>
+                    <label className={s.label}>MATCHING MODE</label>
+                    <div className={s.modeToggle}>
+                      <button
+                        type="button"
+                        className={`${s.modeBtn} ${!config.llm ? s.modeBtnActive : ''}`}
+                        onClick={() => setConfig((p) => ({ ...p, llm: false }))}
+                      >
+                        CPU
+                      </button>
+                      <button
+                        type="button"
+                        className={`${s.modeBtn} ${config.llm ? s.modeBtnActive : ''}`}
+                        onClick={() => setConfig((p) => ({ ...p, llm: true }))}
+                      >
+                        LLM
+                      </button>
+                    </div>
+                    <p className={s.hint}>
+                      {config.llm
+                        ? 'LLM mode uses AI for higher precision matching. Requires OpenAI API key.'
+                        : 'CPU mode uses keyword matching only. Zero API cost.'}
+                    </p>
+                  </div>
+
+                  <div className={s.field}>
+                    <label className={s.label}>MINIMUM SALARY (ANNUAL)</label>
+                    <input
+                      type="number"
+                      className={s.input}
+                      value={config.salary_min ?? 0}
+                      onChange={(e) =>
+                        setConfig((p) => ({
+                          ...p,
+                          salary_min: Number(e.target.value),
+                        }))}
+                      placeholder="0 = no filter"
+                    />
+                    <p className={s.hint}>
+                      Annual salary in CAD (e.g. 100000). 0 = gate disabled.
+                    </p>
+                  </div>
+
+                  <div className={s.field}>
+                    <label className={s.label}>SCORING THRESHOLDS</label>
+                    <p className={s.hint}>
+                      Controls how the CPU pre-scorer classifies matches.
+                      Re-run Score Jobs on the Matching page after changing these so stored
+                      fit scores refresh.
+                    </p>
+                  </div>
+
+                  <div className={s.twoCol}>
+                    <div className={s.field}>
+                      <label className={s.label}>NTH BONUS WEIGHT</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min={0}
+                        max={1.0}
+                        className={s.input}
+                        value={config.nth_bonus_weight ?? 0.10}
+                        onChange={(e) =>
+                          setConfig((p) => ({
+                            ...p,
+                            nth_bonus_weight: parseFloat(e.target.value),
+                          }))}
+                      />
+                      <p className={s.hint}>
+                        Bonus added to fit score for nice-to-have skill overlap:
+                        fit_score = req_coverage + nth_bonus × this value (default 0.10).
+                        Scores can exceed 1.0 when NTH bonus applies.
+                      </p>
+                    </div>
+
+                    <div className={s.field}>
+                      <label className={s.label}>STRONG MATCH THRESHOLD</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min={0}
+                        max={1}
+                        className={s.input}
+                        value={config.cpu_strong_threshold ?? 0.85}
+                        onChange={(e) =>
+                          setConfig((p) => ({
+                            ...p,
+                            cpu_strong_threshold: parseFloat(e.target.value),
+                          }))}
+                      />
+                      <p className={s.hint}>{'Fit score \u2265 this \u2192 strong match, skip LLM (default 0.85)'}</p>
+                    </div>
+                  </div>
+
+                  <div className={s.field}>
+                    <label className={s.label}>WEAK MATCH THRESHOLD</label>
+                    <input
+                      type="number"
+                      step="0.05"
+                      min={0}
+                      max={1}
+                      className={s.input}
+                      value={config.cpu_binary_threshold ?? 0.50}
+                      onChange={(e) =>
+                        setConfig((p) => ({
+                          ...p,
+                          cpu_binary_threshold: parseFloat(e.target.value),
+                        }))}
+                    />
+                    <p className={s.hint}>{'CPU mode: below this \u2192 weak, above \u2192 stretch (default 0.50)'}</p>
                   </div>
                 </Fragment>
               )}

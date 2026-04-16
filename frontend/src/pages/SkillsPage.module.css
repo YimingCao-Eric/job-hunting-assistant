@@ -1,0 +1,277 @@
+.summaryBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #f4f4f5;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #333;
+}
+
+.tabBar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.tabBtn {
+  padding: 8px 14px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tabBtn:hover {
+  background: #f8f8f8;
+}
+
+.tabBtnActive {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.search {
+  flex: 1;
+  min-width: 200px;
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.refreshBtn {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid #888;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.refreshBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pill {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #ddd;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pillActive {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #f4f4f5;
+  border-bottom: 1px solid #e5e5e5;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+}
+
+.table tr:nth-child(even) td {
+  background: #fafafa;
+}
+
+.table tr:nth-child(odd) td {
+  background: #ffffff;
+}
+
+.chipYes {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(5, 118, 66);
+  background: rgb(240, 255, 244);
+}
+
+.chipNo {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #888;
+  background: #f0f0f0;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.statuspending {
+  color: #555;
+  background: #e8e8e8;
+}
+
+.statusapproved {
+  color: rgb(5, 118, 66);
+  background: rgb(230, 250, 235);
+}
+
+.statusrejected {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.statusmerged {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.expandRow td {
+  background: #f0f4ff !important;
+  padding: 14px 12px;
+}
+
+.actionGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.input {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  min-width: 180px;
+}
+
+.btnApprove {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: rgb(5, 118, 66);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btnMerge {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btnReject {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #b91c1c;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btnSmall:disabled,
+.btnApprove:disabled,
+.btnMerge:disabled,
+.btnReject:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.bulkBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: #fff8e6;
+  border: 1px solid #f5d67a;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.error {
+  color: #c0392b;
+  margin-bottom: 12px;
+ font-size: 14px;
+}
+
+.rowClick {
+  cursor: pointer;
+}
+
+.rowClick:hover td {
+  background: #f3f6ff !important;
+}
+
+.checkbox {
+  margin-right: 8px;
+}

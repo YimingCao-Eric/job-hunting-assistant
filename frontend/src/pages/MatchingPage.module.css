@@ -1,0 +1,571 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.titleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  width: 100%;
+}
+
+.modeToggle {
+  display: inline-flex;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.modeBtn {
+  padding: 8px 16px;
+  border: none;
+  background: #f5f5f5;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.modeBtnActive {
+  background: #1a5fb4;
+  color: #fff;
+}
+
+.runBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  background: #1a5fb4;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.runBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dedupActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.matchStatus {
+  font-size: 13px;
+  color: #555555;
+  margin-left: auto;
+}
+
+.resetBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid #c0392b;
+  background: #fff;
+  color: #c0392b;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resetBtn:hover:not(:disabled) {
+  background: #fde8e8;
+}
+
+.scorePlaceholderBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  background: #cccccc;
+  color: #888888;
+  font-weight: 600;
+  cursor: not-allowed;
+}
+
+.resetBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.successMsg {
+  color: #2e7d32;
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.dialog {
+  background: #fff;
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  border: 1px solid #e5e5e5;
+}
+
+.dialogTitle {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #222;
+}
+
+.dialogBody {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #444;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.dialogBtnSecondary {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: #f5f5f5;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.dialogBtnSecondary:hover:not(:disabled) {
+  background: #ebebeb;
+}
+
+.dialogBtnDanger {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: #c0392b;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dialogBtnDanger:hover:not(:disabled) {
+  background: #a93226;
+}
+
+.dialogBtnSecondary:disabled,
+.dialogBtnDanger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.panel {
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+}
+
+.panelTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.summary {
+  color: #444;
+  margin-bottom: 16px;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.table th {
+  font-weight: 600;
+  color: #333;
+}
+
+.subNav {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.subNav a {
+  color: #1a5fb4;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.subNav a:hover {
+  text-decoration: underline;
+}
+
+.empty {
+  color: #666;
+  font-style: italic;
+}
+
+.buttonBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.buttonGroup {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #c5d4eb;
+}
+
+.buttonGroup .runBtn {
+  border-radius: 0;
+  margin: 0;
+}
+
+.undoIconBtn {
+  padding: 10px 14px;
+  border: none;
+  border-left: 1px solid #c5d4eb;
+  background: #eef3fb;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: #1a5fb4;
+}
+
+.undoIconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.filterBar {
+  margin-bottom: 16px;
+}
+
+.subFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.subFilter {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #ddd;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.subFilterActive {
+  composes: subFilter;
+  background: #1a5fb4;
+  color: #fff;
+  border-color: #1a5fb4;
+}
+
+.subSubFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.subSubFilter {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid #e0e0e0;
+  background: #fafafa;
+  cursor: pointer;
+}
+
+.subSubFilterActive {
+  composes: subSubFilter;
+  background: #e3f2fd;
+  border-color: #1a5fb4;
+  color: #0d47a1;
+}
+
+.matchLevelPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.levelPill {
+  composes: subFilter;
+  font-size: 12px;
+}
+
+.levelPillActive {
+  composes: levelPill;
+  background: #2e7d32;
+  color: #fff;
+  border-color: #2e7d32;
+}
+
+.stageBadgeCPU,
+.stageBadgeLLM {
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.stageBadgeCPU {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.stageBadgeLLM {
+  background: #f3e5f5;
+  color: #6a1b9a;
+}
+
+.cardWrap {
+  position: relative;
+}
+
+.dismissBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dismissBtn:hover {
+  background: rgba(192, 57, 43, 0.9);
+}
+
+.restoreBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid #1a5fb4;
+  background: #fff;
+  color: #1a5fb4;
+  cursor: pointer;
+}
+
+.stageCornerCPU,
+.stageCornerLLM {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.stageCornerCPU {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.stageCornerLLM {
+  background: #f3e5f5;
+  color: #6a1b9a;
+}
+
+.runningStatus {
+  margin: 8px 0 16px;
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.runningHint {
+  color: #888;
+  font-weight: 400;
+}
+
+.logLine {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: #888;
+  max-width: 640px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Report flag — left of dismiss × */
+.flagBtn {
+  position: absolute;
+  top: 8px;
+  right: 36px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: #aaa;
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+}
+
+.flagBtn:hover {
+  color: #e67e22;
+  background: rgba(230, 126, 34, 0.1);
+}
+
+.flagBtnActive {
+  color: #e67e22 !important;
+}
+
+.flagBtnSolo {
+  right: 8px;
+}
+
+.reportBox {
+  background: white;
+  border-radius: 8px;
+  padding: 24px;
+  width: 420px;
+  max-width: 95vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+}
+
+.reportTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.reportJobName {
+  font-size: 13px;
+  color: #666;
+  margin: 0 0 16px;
+}
+
+.reportTypes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.reportTypeLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.reportSelect,
+.reportInput {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 10px;
+  box-sizing: border-box;
+}
+
+.reportNote {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 60px;
+  margin-bottom: 14px;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.reportActions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.submitReportBtn {
+  padding: 8px 18px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.submitReportBtn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.submitReportBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

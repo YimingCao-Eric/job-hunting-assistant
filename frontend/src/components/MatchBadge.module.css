@@ -1,0 +1,54 @@
+.matchFooter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.matchBadge {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+
+.badge_strong_match {
+  background: #f0fff4;
+  color: rgb(5, 118, 66);
+}
+
+.badge_possible_match {
+  background: #e8f4fd;
+  color: rgb(10, 102, 194);
+}
+
+.badge_stretch_match {
+  background: #fffbe6;
+  color: #7a5c00;
+}
+
+.badge_weak_match {
+  background: #fff0f0;
+  color: rgb(192, 57, 43);
+}
+
+.confidenceDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot_high {
+  background: rgb(46, 125, 50);
+}
+
+.dot_medium {
+  background: #cc8800;
+}
+
+.dot_low {
+  background: rgb(192, 57, 43);
+}

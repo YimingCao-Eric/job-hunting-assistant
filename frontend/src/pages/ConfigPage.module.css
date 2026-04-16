@@ -316,3 +316,10 @@
   font-size: 0.9rem;
   font-family: inherit;
 }
+
+.twoCol {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}

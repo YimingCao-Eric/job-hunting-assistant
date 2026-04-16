@@ -1,0 +1,481 @@
+.pageHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.saveBtn {
+  background: #111111;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.saveBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.saveBtnSaved {
+  background: rgb(46, 125, 50);
+}
+
+.saveBtnError {
+  background: rgb(192, 57, 43);
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #e5e5e5;
+  margin-bottom: 20px;
+}
+
+.tab {
+  background: #fafafa;
+  color: #444444;
+  border: 1px solid #d8d8d8;
+  border-radius: 0;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tabActive {
+  background: #111111;
+  color: white;
+  border-color: #111111;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.label {
+  display: block;
+  font-size: 12.8px;
+  font-weight: 600;
+  color: #444444;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.input {
+  width: 100%;
+  background: #fafafa;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  outline: none;
+  border-color: rgb(26, 95, 180);
+}
+
+.inputError {
+  border-color: rgb(192, 57, 43);
+}
+
+.textarea {
+  width: 100%;
+  background: #fafafa;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 80px;
+  font-family: inherit;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: rgb(26, 95, 180);
+}
+
+.twoCol {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.entryCard {
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.entryCardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.entryCardTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #444444;
+}
+
+.removeBtn {
+  background: none;
+  border: none;
+  color: rgb(170, 51, 51);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.addBtn {
+  width: 100%;
+  background: white;
+  border: 1px dashed #d0d0d0;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: #444444;
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.addBtn:hover {
+  border-color: #888888;
+  color: #111111;
+}
+
+.urlTagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.urlTag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 13px;
+}
+
+.tagRemove {
+  background: none;
+  border: none;
+  color: #888888;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.extractedSkillsSection {
+  border-top: 1px solid #e5e5e5;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.extractedSkillsLabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #888888;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.skillTagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.skillTag {
+  background: #f0f4ff;
+  color: rgb(26, 95, 180);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.extractedMeta {
+  display: block;
+  font-size: 11px;
+  color: #888888;
+  margin-top: 4px;
+}
+
+.extractedPanel {
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-top: 24px;
+  font-size: 13px;
+  color: #555555;
+}
+
+.extractedModeLlm {
+  color: rgb(26, 95, 180);
+  font-weight: 600;
+}
+
+.extractedModeCpu {
+  color: #555555;
+}
+
+.validationMsg {
+  color: rgb(192, 57, 43);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.emptyState {
+  color: #888888;
+  font-size: 14px;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.spinnerWrap {
+  display: flex;
+  justify-content: center;
+  padding: 48px 0;
+}
+
+.resumeUploadBox {
+  position: relative;
+  background: #fafafa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+
+.resumeUploadTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333333;
+  margin-bottom: 12px;
+}
+
+.resumeFileInputHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.resumeChooseBtn {
+  display: inline-block;
+  background: #111111;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resumeChooseBtn:hover {
+  background: #333333;
+}
+
+.resumeChooseBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.resumeHint {
+  font-size: 13px;
+  color: #666666;
+  margin: 10px 0 0;
+}
+
+.resumeStatus {
+  font-size: 13px;
+  color: #444444;
+  margin: 0;
+}
+
+.resumePreviewBlock {
+  margin-top: 4px;
+}
+
+.resumeSuccess {
+  font-size: 13px;
+  color: rgb(46, 125, 50);
+  margin: 0 0 10px;
+}
+
+.resumeToggleBtn {
+  background: none;
+  border: none;
+  color: rgb(26, 95, 180);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 8px;
+  text-decoration: underline;
+}
+
+.resumeMarkdownPre {
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 0 12px;
+}
+
+.resumePreviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.resumeParseBtn {
+  background: rgb(26, 95, 180);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.resumeParseBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.resumeCancelBtn {
+  background: white;
+  color: #444444;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.resumeLinkBtn {
+  background: none;
+  border: none;
+  color: rgb(26, 95, 180);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.resumeError {
+  color: rgb(192, 57, 43);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.prefilledFromResume {
+  border-left: 3px solid rgb(129, 199, 132);
+  padding-left: 12px;
+  margin-left: -2px;
+  background: rgba(129, 199, 132, 0.06);
+  border-radius: 0 6px 6px 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+/* Skill editor (extracted panel) */
+
+.skillSectionLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: #888888;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.skillTagReadOnly {
+  display: inline-flex;
+  align-items: center;
+  background: #f0f4ff;
+  color: rgb(26, 95, 180);
+  border: 1px solid #d0dcf5;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.skillInputRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.skillInput {
+  flex: 1;
+  max-width: 260px;
+  padding: 7px 10px;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fafafa;
+  outline: none;
+}
+
+.skillInput:focus {
+  border-color: rgb(26, 95, 180);
+  background: white;
+}
+
+.skillAddBtn {
+  padding: 7px 14px;
+  background: rgb(26, 95, 180);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.skillAddBtn:disabled {
+  background: #cccccc;
+  cursor: not-allowed;
+}
+
+.skillHint {
+  font-size: 12px;
+  color: #999999;
+  margin-top: 6px;
+}

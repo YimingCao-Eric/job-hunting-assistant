@@ -11,12 +11,14 @@ extension/          Chrome Extension (Manifest V3) — see extension/README.md
   └── popup/            Settings UI and scan control
 
 frontend/           Vite + React, CSS modules, api.js central client (default port 5173)
-  └── Routes: / → Config, /jobs → Jobs, /logs → Logs, /dedup → Dedup
+  └── Routes: /, /profile, /jobs, /logs, /skills, /matching, /dedup (see frontend/README.md)
 
 backend/            FastAPI + SQLAlchemy async + PostgreSQL
-  ├── routers/          /jobs, /config, /extension, /dedup
-  ├── dedup/            Pass 0/1/2 pipeline, dedup reports
-  ├── models/           SQLAlchemy ORM (scraped_jobs, extension_state, extension_run_logs, …)
+  ├── routers/          /jobs (+ job issue reports), /config, /extension, /dedup, /match/*, /profile, /skills
+  ├── dedup/            Pass 0/1/2 pipeline (hash + cosine), chain resolution, dedup reports
+  ├── matching/         CPU/LLM JD extraction, gates, CPU pre-score; pipeline stages for /jobs/match
+  ├── profile/          Resume PDF/text parsing and profile JSON for matching
+  ├── models/           SQLAlchemy ORM (scraped_jobs, job_reports, match_reports, skill_candidates, …)
   ├── schemas/          Pydantic v2 request/response models
   └── core/             Config file, database, auth
 
@@ -74,7 +76,7 @@ npm install
 npm run dev
 ```
 
-Opens the app at `http://localhost:5173` — **Config** (`/`), **Jobs** (`/jobs`), **Logs** (`/logs`), **Dedup** (`/dedup`). Use the Config page for `website`, Indeed/Glassdoor fields, dedup mode, and filters (the extension popup only syncs a subset of fields).
+Opens the app at `http://localhost:5173` — **Config** (`/`), **Profile** (`/profile`), **Jobs** (`/jobs`), **Logs** (`/logs`), **Skills** (`/skills`), **Matching** (`/matching`), **Dedup** (`/dedup`). Use the Config page for `website`, Indeed/Glassdoor fields, dedup mode, LLM toggle, and filters (the extension popup only syncs a subset of fields). **Matching** runs dedup (optional) plus staged CPU/LLM extraction, gates, and scoring; long runs use a background job on the API while the UI polls **`GET /match/reports`** for completion. On **Matching**, the **report flag** opens an **issue report** (extraction/scoring feedback); submitted reports are listed under **Logs → Reports** (separate from pipeline **Matching** run reports). Reports are stored in **`job_reports`** and do not modify job rows until you action them from the Reports tab.
 
 ### 7. Scan
 
@@ -95,7 +97,7 @@ Run the automated smoke test suite against a running backend:
 docker compose exec backend python smoke_test.py
 ```
 
-This verifies: health check, config read, job ingest, run log lifecycle, and extension state.
+This verifies: health, config, job ingest (including content-duplicate `original_job_id`), run log start/complete/list, extension state, and trigger-scan / pending-scan.
 
 ## Config Reference
 
@@ -105,6 +107,7 @@ Search parameters live in `config.json` (path set by `CONFIG_PATH` in Docker). E
 | --- | --- |
 | `website` | `"linkedin"`, `"indeed"`, or `"glassdoor"` — default site when the extension opens a scan without a trigger override |
 | `dedup_mode` | `"manual"` — dedup only when you run it from the **Dedup** page; `"sync"` — after each **completed** scan run log, the backend runs full dedup in a background task (Scan All: once after the final site only) |
+| `llm` | When true, enables LLM-backed resume parsing and matching stages that require it (e.g. **Matching** button 2 on the web app) |
 | `keyword` | Job search keyword (LinkedIn default search) |
 | `location` | Location filter (LinkedIn default search) |
 | `f_tpr_bound` | Max look-back hours for LinkedIn time filter (`f_TPR` computation) |
@@ -136,11 +139,33 @@ All endpoints except `/health` expect **`Authorization: Bearer <token>`** (e.g. 
 | `GET` | `/config` | Read search config |
 | `PUT` | `/config` | Merge-update search config |
 | `POST` | `/jobs/ingest` | Ingest a scraped job (URL + content-hash dedup at ingest; no per-row Pass 0/1 here) |
-| `GET` | `/jobs` | List jobs. Query params include `website`, `dismissed`, `dedup_status` (`passed` / `removed` / `all`), dates, pagination. |
-| `GET` | `/jobs/{id}` | Job detail |
+| `GET` | `/jobs` | List jobs. Query params include `website`, `dismissed`, `dedup_status` (`passed` / `removed` / `all`), dates, pagination. Each item includes **`has_report`** (true when a **pending** row exists in **`job_reports`**). |
+| `GET` | `/jobs/{id}` | Job detail (includes **`has_report`** for pending issue reports) |
 | `PUT` | `/jobs/{id}` | Update job (e.g. dismiss) |
+| `POST` | `/jobs/{id}/report` | Create or update a **pending** issue report for the job (`report_type`, `detail` JSON). Does not change **`scraped_jobs`**. At most one pending report per job per `report_type` (upsert). |
+| `GET` | `/jobs/reports` | List issue reports (`status`, `report_type`, pagination). Joins job title/company/match fields for display. |
+| `GET` | `/jobs/reports/stats` | Counts: pending total, pending by type, grand total. |
+| `PUT` | `/jobs/reports/{id}/action` | Action on an issue report (e.g. **`dismiss`**). |
 | `POST` | `/jobs/dedup` | Run full dedup pipeline (manual) |
 | `POST` | `/jobs/dedup/reset` | Clear dedup-assigned `skip_reason` for whitelisted reasons (see backend) |
+| `POST` | `/jobs/dedup/resolve-chains` | One-time repair: walk `dedup_original_job_id` chains so removed rows point at a **passed** job (idempotent; safe after upgrades) |
+| `POST` | `/jobs/match` | Queue matching pipeline work. JSON body optional: `mode`: `cpu_only` (Button 1: CPU extraction + gates), `llm_extraction_gates` (Button 2; requires `llm` in config), `cpu_score` (Button 3), or omit for legacy Step-B extraction. Returns immediately **`{ "status": "started", "mode": … }`**; work runs in a **BackgroundTask** with a fresh DB session. Poll **`GET /match/reports`** (new row) or job fields to detect completion. |
+| `POST` | `/jobs/match/gates` | Run hard gates on extracted jobs (separate from button flows) |
+| `POST` | `/jobs/match/score` | CPU pre-score endpoint (legacy path; Button 3 uses `/jobs/match` with `cpu_score`) |
+| `GET` | `/jobs/match/extracted-count` | Count of passed dedup jobs with `matched_at` set |
+| `GET` | `/match/reports` | Recent match run reports (metrics, `matching_mode`, durations) |
+| `GET` | `/match/reports/{id}` | Single match report |
+| `GET` | `/match/logs` | Recent matching pipeline log lines (ring buffer) |
+| `GET` | `/profile` | Read profile JSON used for matching |
+| `PUT` | `/profile` | Update profile |
+| `GET` | `/profile/extracted` | Read `_extracted` resume-derived block |
+| `POST` | `/profile/upload-resume` | Upload resume file (PDF) |
+| `POST` | `/profile/parse-resume` | Parse resume markdown into structured fields |
+| `GET` | `/skills/candidates` | Skill alias candidates (pagination/filter; see backend README) |
+| `PUT` | `/skills/candidates/{id}/approve` | Approve a candidate (and optional canonical) |
+| `PUT` | `/skills/candidates/{id}/merge` | Merge into another canonical |
+| `PUT` | `/skills/candidates/{id}/reject` | Reject a candidate |
+| `POST` | `/skills/candidates/refresh-aliases` | Refresh persisted alias map from DB |
 | `GET` | `/jobs/skipped` | Skipped rows for a run (`scan_run_id` required) |
 | `GET` | `/dedup/reports` | List dedup reports |
 | `GET` | `/dedup/reports/{id}` | Single dedup report |
@@ -157,7 +182,7 @@ All endpoints except `/health` expect **`Authorization: Bearer <token>`** (e.g. 
 
 ### `GET /jobs` response shape (high level)
 
-Each job includes identifiers, `website`, title, company, location, URLs, `skip_reason`, **`dedup_similarity_score`**, **`dedup_original_job_id`** (when set by dedup), `original_job_id` (ingest-time content duplicate), matching pipeline fields, timestamps, etc.
+Each job includes identifiers, `website`, title, company, location, URLs, `skip_reason`, **`dedup_similarity_score`**, **`dedup_original_job_id`** (when set by dedup), `original_job_id` (ingest-time content duplicate), matching pipeline fields, **`has_report`** (pending issue report), timestamps, etc.
 
 ### `GET /extension/run-log` list item shape
 
@@ -167,7 +192,9 @@ Includes run metadata, counters, `search_filters`, **`scan_all`**, **`scan_all_p
 
 - **`extension_state`**: includes `scan_requested`, `stop_requested`, `scan_website`, and pending **Scan All** fields (`scan_all`, `scan_all_position`, `scan_all_total`) cleared when **`GET /pending-scan`** consumes a request.
 - **`extension_run_logs`**: stores per-run **`scan_all`** metadata so the backend knows whether to run **sync dedup** only on the last leg of Scan All.
-- **`scraped_jobs`**: `original_job_id` for ingest-time content duplicate; **`dedup_original_job_id`** for dedup “kept” row when removed as duplicate; optional **`dedup_similarity_score`** for cosine matches.
+- **`scraped_jobs`**: `original_job_id` for ingest-time content duplicate; **`dedup_original_job_id`** for dedup “kept” row when removed as duplicate; optional **`dedup_similarity_score`** for cosine matches. Pass 2 resolves in-memory chains before writing; cosine skips jobs already flagged in the same run as similarity “originals.”
+- **`dedup_reports`**: persisted metrics per manual or post-scan dedup run.
+- **`job_reports`**: user-submitted issue reports (match level, YOE, skills, wrong gate, etc.). Status `pending` \| `dismissed` \| `actioned`. Not cleared by matching/dedup undo endpoints; **`has_report`** on job API responses reflects **pending** rows only.
 
 ## Development
 

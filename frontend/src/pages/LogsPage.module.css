@@ -325,3 +325,176 @@
 .dedupReasonVal {
   font-weight: 600;
 }
+
+.reportsSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.reportStatusFilter {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.reportFilterTab,
+.reportFilterTabActive {
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #d1d5db;
+  background: white;
+  cursor: pointer;
+}
+
+.reportFilterTab:hover {
+  background: #f9fafb;
+}
+
+.reportFilterTabActive {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 500;
+}
+
+.reportCard {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: white;
+}
+
+.reportHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.reportTypeBadge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #f3f4f6;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.type_match_level {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.type_yoe {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.type_missing_skills {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.type_false_skills {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.type_wrong_gate {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.type_other {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.reportJobTitle {
+  font-size: 14px;
+  font-weight: 500;
+  flex: 1;
+  min-width: 120px;
+}
+
+.reportDate {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.reportDetail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.reportMeta {
+  font-size: 12px;
+  color: #6b7280;
+  background: #f9fafb;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.reportDetailLine {
+  font-size: 13px;
+  color: #111827;
+}
+
+.reportNoteText {
+  font-size: 13px;
+  color: #4b5563;
+  flex-basis: 100%;
+}
+
+.reportActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.reportActionBtn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  background: white;
+  cursor: pointer;
+}
+
+.reportActionBtn:hover {
+  background: #f9fafb;
+}
+
+.reportDismissBtn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  background: white;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.reportDismissBtn:hover {
+  background: #f9fafb;
+}
+
+.reportActionsSoon {
+  font-size: 11px;
+  color: #9ca3af;
+  flex: 1;
+  min-width: 100px;
+}
+
+.reportsEmptyState {
+  font-size: 14px;
+  color: #6b7280;
+  margin: 8px 0 0;
+}

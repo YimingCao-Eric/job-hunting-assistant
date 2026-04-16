@@ -10,7 +10,6 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -94,8 +93,8 @@ class ScrapedJob(Base):
     fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     req_coverage: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Matching-phase skip — set by the LLM matching pipeline when a job is
-    # filtered out post-scrape (e.g. wrong seniority, outside salary range).
+    # Matching-phase skip — set by gates / matching when a job is filtered
+    # post-scrape (e.g. outside salary range).
     # Distinct from skip_reason (scrape-time skip: phantom, duplicate, etc.).
     match_skip_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     required_skills: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -111,3 +110,15 @@ class ScrapedJob(Base):
     matched_at: Mapped[str | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    other_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    education_req_degree: Mapped[str | None] = mapped_column(String, nullable=True)
+    education_req_field: Mapped[str | None] = mapped_column(String, nullable=True)
+    education_field_qualified: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    visa_req: Mapped[str | None] = mapped_column(String, nullable=True)
+    blocking_gap: Mapped[str | None] = mapped_column(String, nullable=True)
+    gap_adjacency: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    matching_mode: Mapped[str | None] = mapped_column(String, nullable=True)
+    removal_stage: Mapped[str | None] = mapped_column(String, nullable=True)

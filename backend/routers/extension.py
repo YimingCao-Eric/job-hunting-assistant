@@ -13,6 +13,7 @@ from core.config import settings
 from core.config_file import read_config_file
 from core.database import AsyncSessionLocal, get_db
 from dedup.service import run_dedup
+from matching.step_b import run_step_b_extraction
 from models.extension_run_log import ExtensionRunLog
 from models.extension_state import ExtensionState
 from schemas.config import SearchConfigRead
@@ -40,6 +41,8 @@ async def _run_dedup_for_scan(log_id: UUID) -> None:
                 scan_run_id=log_id,
                 trigger="post_scan",
             )
+            if cfg.dedup_mode == "sync":
+                await run_step_b_extraction(db, trigger="post_dedup")
             await db.commit()
         except Exception:
             logger.exception("Auto dedup failed for scan run %s", log_id)

@@ -1,20 +1,32 @@
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, update
 
+from core.config import settings
 from core.database import AsyncSessionLocal, run_migrations
 from models.extension_run_log import ExtensionRunLog
 from routers import config as config_router
 from routers import dedup as dedup_router
 from routers import extension as extension_router
+from routers import job_reports as job_reports_router
 from routers import jobs as jobs_router
+from routers import matching as matching_router
+from routers import profile as profile_router
+from routers import skills as skills_router
+
+logging.getLogger("matching").setLevel(logging.DEBUG)
+logging.getLogger("routers.matching").setLevel(logging.DEBUG)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    Path(settings.config_path).parent.mkdir(parents=True, exist_ok=True)
+
     await run_migrations()
 
     async with AsyncSessionLocal() as session:
@@ -56,6 +68,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(matching_router.router)
+app.include_router(skills_router.router)
+app.include_router(profile_router.router)
+app.include_router(job_reports_router.router)
 app.include_router(jobs_router.router)
 app.include_router(config_router.router)
 app.include_router(extension_router.router)

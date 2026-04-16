@@ -40,5 +40,6 @@
   "allowed_languages": [
     "en",
     "cn"
-  ]
+  ],
+  "llm": true
 }

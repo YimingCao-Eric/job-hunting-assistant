@@ -8,6 +8,14 @@ const SKIP_REASON_LABELS = {
     label: 'Blacklisted',
     detail: () => 'company or location blacklisted',
   },
+  blacklisted_company: {
+    label: 'Company blocklist',
+    detail: () => 'company on blocklist',
+  },
+  blacklisted_location: {
+    label: 'Location blocklist',
+    detail: () => 'location matched blocklist',
+  },
   title_blacklisted: {
     label: 'Title Blacklisted',
     detail: () => 'title contains blacklisted term',

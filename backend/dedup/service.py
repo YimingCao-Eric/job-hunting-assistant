@@ -7,7 +7,6 @@ from collections import defaultdict
 from collections.abc import Sequence
 from datetime import datetime
 
-from langdetect import detect
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy import func, select, update
@@ -22,7 +21,6 @@ from schemas.dedup import DedupReportRead, GateResult
 logger = logging.getLogger(__name__)
 
 PASS1_GATE_ORDER = (
-    "language",
     "title_mismatch",
     "contract_mismatch",
     "remote_mismatch",
@@ -107,10 +105,10 @@ def run_pass_0(
 
     for c in config.blacklist_companies or []:
         if c.lower() == company_l:
-            return "blacklisted"
+            return "blacklisted_company"
     for term in config.blacklist_locations or []:
         if term.lower() in location_l:
-            return "blacklisted"
+            return "blacklisted_location"
 
     for term in config.blacklist_titles or []:
         if term.lower() in title_l:
@@ -144,16 +142,6 @@ def run_pass_1(
     title_l = (job_title or "").lower()
     jd_l = jd.lower()
     timings: dict[str, int] = {}
-
-    t0 = time.monotonic()
-    try:
-        lang = detect(jd)
-    except Exception:
-        lang = "en"
-    timings["language"] = int((time.monotonic() - t0) * 1000)
-    allowed = list(config.allowed_languages or ["en"])
-    if lang not in allowed:
-        return "language", timings
 
     t0 = time.monotonic()
     targets = config.target_titles or []
@@ -241,20 +229,6 @@ def _pass1_metrics_linear(
             continue
 
         title = job.job_title or ""
-
-        t_lang = time.monotonic()
-        try:
-            lang = detect(jd)
-        except Exception:
-            lang = "en"
-        dt_lang = int((time.monotonic() - t_lang) * 1000)
-        gate_results["language"]["duration_ms"] += dt_lang
-        gate_results["language"]["checked"] += 1
-        allowed = list(config.allowed_languages or ["en"])
-        if lang not in allowed:
-            gate_results["language"]["flagged"] += 1
-            pass1_flags[job.id] = "language"
-            continue
 
         t0 = time.monotonic()
         targets = config.target_titles or []

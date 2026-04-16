@@ -3,11 +3,12 @@ from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth import get_current_user
 from core.database import get_db
+from models.job_report import JobReport
 from models.scraped_job import ScrapedJob
 from schemas.scraped_job import (
     JobUpdate,
@@ -19,6 +20,32 @@ from schemas.scraped_job import (
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+_BLACKLIST_SKIP_REASONS = frozenset(
+    {
+        "blacklisted",
+        "blacklisted_company",
+        "blacklisted_location",
+        "title_blacklisted",
+        "job_type",
+        "agency",
+        "remote_mismatch",
+        "contract_mismatch",
+        "sponsorship",
+    }
+)
+
+
+def _normalize_job_update_payload(data: dict) -> dict:
+    if "extracted_salary_min" in data:
+        v = data.pop("extracted_salary_min")
+        if "salary_min_extracted" not in data:
+            data["salary_min_extracted"] = v
+    if "match_confidence" in data:
+        v = data.pop("match_confidence")
+        if "confidence" not in data:
+            data["confidence"] = v
+    return data
 
 
 def _hash_description(text: str | None) -> str:
@@ -112,20 +139,136 @@ async def list_jobs(
     scraped_from: date | None = None,
     scraped_to: date | None = None,
     dedup_status: str | None = None,
+    skip_reason_filter: str | None = None,
+    match_skip_reason_filter: str | None = None,
+    blacklist_filter: bool | None = None,
+    blacklist_reason: str | None = None,
+    dedup_type: str | None = None,
+    removal_stage: str | None = None,
+    matching_mode: str | None = None,
+    match_level: str | None = None,
+    match_status: str | None = None,
+    llm_step_d: bool | None = Query(
+        None,
+        description="If true, only jobs scored by Step D (matching_mode=llm and confidence set).",
+    ),
+    order_by: str | None = Query(
+        None,
+        description='Sort field: "fit_score" (desc, nulls last) or "created_at" (desc).',
+    ),
     limit: int = Query(25, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
+    sort_key = order_by if order_by in ("fit_score", "created_at") else "created_at"
+    if sort_key == "fit_score":
+        order_clause = (
+            ScrapedJob.fit_score.desc().nulls_last(),
+            ScrapedJob.created_at.desc(),
+        )
+    else:
+        order_clause = (ScrapedJob.created_at.desc(),)
+
     conditions = []
     if dedup_status == "removed":
-        conditions.append(ScrapedJob.skip_reason.isnot(None))
+        conditions.append(
+            or_(
+                ScrapedJob.skip_reason.isnot(None),
+                ScrapedJob.dismissed == True,  # noqa: E712
+                ScrapedJob.match_skip_reason.isnot(None),
+            )
+        )
     elif dedup_status == "passed":
         conditions.append(ScrapedJob.skip_reason.is_(None))
+        conditions.append(ScrapedJob.match_skip_reason.is_(None))
+        conditions.append(ScrapedJob.dismissed == False)  # noqa: E712
     elif dedup_status == "all":
         pass
     else:
         conditions.append(ScrapedJob.skip_reason.is_(None))
+
+    if dedup_status == "removed" and skip_reason_filter:
+        _dedup_reasons = frozenset(
+            {
+                "already_scraped",
+                "job_type",
+                "blacklisted",
+                "blacklisted_company",
+                "blacklisted_location",
+                "title_blacklisted",
+                "agency",
+                "title_mismatch",
+                "contract_mismatch",
+                "remote_mismatch",
+                "sponsorship",
+            }
+        )
+        _gate_reasons = frozenset(
+            {
+                "yoe_gate",
+                "salary_gate",
+                "education_gate",
+                "visa_gate",
+                "extraction_failed",
+                "scoring_failed",
+            }
+        )
+        if skip_reason_filter in _dedup_reasons:
+            conditions.append(ScrapedJob.skip_reason == skip_reason_filter)
+        elif skip_reason_filter == "language":
+            conditions.append(
+                or_(
+                    ScrapedJob.match_skip_reason == "language",
+                    ScrapedJob.skip_reason == "language",
+                )
+            )
+        elif skip_reason_filter in _gate_reasons:
+            conditions.append(ScrapedJob.match_skip_reason == skip_reason_filter)
+            conditions.append(ScrapedJob.skip_reason.is_(None))
+
+    if match_skip_reason_filter:
+        conditions.append(ScrapedJob.match_skip_reason == match_skip_reason_filter)
+        conditions.append(ScrapedJob.skip_reason.is_(None))
+
+    if removal_stage:
+        conditions.append(ScrapedJob.removal_stage == removal_stage)
+
+    if matching_mode:
+        conditions.append(ScrapedJob.matching_mode == matching_mode)
+
+    if blacklist_filter:
+        conditions.append(
+            or_(
+                ScrapedJob.dismissed == True,  # noqa: E712
+                ScrapedJob.skip_reason.in_(_BLACKLIST_SKIP_REASONS),
+            )
+        )
+
+    if blacklist_reason:
+        _br_map = {
+            "blacklisted_company": "blacklisted_company",
+            "blacklisted_location": "blacklisted_location",
+            "title_blacklisted": "title_blacklisted",
+            "job_type": "job_type",
+            "agency": "agency",
+            "remote": "remote_mismatch",
+            "contract": "contract_mismatch",
+            "sponsorship": "sponsorship",
+        }
+        if blacklist_reason == "dismissed":
+            conditions.append(ScrapedJob.dismissed == True)  # noqa: E712
+        elif blacklist_reason in _br_map:
+            conditions.append(ScrapedJob.skip_reason == _br_map[blacklist_reason])
+        elif blacklist_reason == "blacklisted":
+            conditions.append(ScrapedJob.skip_reason == "blacklisted")
+
+    if dedup_type in ("hash_exact", "cosine"):
+        conditions.append(ScrapedJob.skip_reason == "already_scraped")
+        if dedup_type == "hash_exact":
+            conditions.append(ScrapedJob.dedup_similarity_score.is_(None))
+        else:
+            conditions.append(ScrapedJob.dedup_similarity_score.isnot(None))
 
     if website:
         conditions.append(ScrapedJob.website == website)
@@ -148,20 +291,41 @@ async def list_jobs(
         )
         conditions.append(ScrapedJob.created_at < hi)
 
+    if match_level:
+        conditions.append(ScrapedJob.match_level == match_level)
+        conditions.append(ScrapedJob.match_skip_reason.is_(None))
+    if match_status == "unscored":
+        conditions.append(ScrapedJob.match_level.is_(None))
+        conditions.append(ScrapedJob.match_skip_reason.is_(None))
+    elif match_status == "scored":
+        conditions.append(ScrapedJob.match_level.is_not(None))
+    elif match_status == "gate_skipped":
+        conditions.append(ScrapedJob.match_skip_reason.is_not(None))
+        conditions.append(ScrapedJob.match_level.is_(None))
+
+    if llm_step_d is True:
+        conditions.append(ScrapedJob.matching_mode == "llm")
+        conditions.append(ScrapedJob.confidence.isnot(None))
+
+    pending_report_exists = exists().where(
+        JobReport.job_id == ScrapedJob.id,
+        JobReport.status == "pending",
+    )
+
     if conditions:
         count_stmt = select(func.count()).select_from(ScrapedJob).where(*conditions)
         stmt = (
-            select(ScrapedJob)
+            select(ScrapedJob, pending_report_exists.label("has_report"))
             .where(*conditions)
-            .order_by(ScrapedJob.created_at.desc())
+            .order_by(*order_clause)
             .offset(offset)
             .limit(limit)
         )
     else:
         count_stmt = select(func.count()).select_from(ScrapedJob)
         stmt = (
-            select(ScrapedJob)
-            .order_by(ScrapedJob.created_at.desc())
+            select(ScrapedJob, pending_report_exists.label("has_report"))
+            .order_by(*order_clause)
             .offset(offset)
             .limit(limit)
         )
@@ -169,9 +333,12 @@ async def list_jobs(
     total = (await db.execute(count_stmt)).scalar_one()
 
     result = await db.execute(stmt)
-    items = result.scalars().all()
+    items = [
+        ScrapedJobRead.model_validate(job).model_copy(update={"has_report": bool(hr)})
+        for job, hr in result.all()
+    ]
     return JobsListResponse(
-        items=list(items),
+        items=items,
         total=total,
         limit=limit,
         offset=offset,
@@ -210,7 +377,18 @@ async def get_job(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    has_report_row = await db.execute(
+        select(
+            exists().where(
+                JobReport.job_id == job_id,
+                JobReport.status == "pending",
+            )
+        )
+    )
+    has_report = bool(has_report_row.scalar_one())
+    return ScrapedJobDetail.model_validate(job).model_copy(
+        update={"has_report": has_report}
+    )
 
 
 @router.put("/{job_id}", response_model=ScrapedJobRead)
@@ -224,7 +402,8 @@ async def update_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    for field, value in body.model_dump(exclude_unset=True).items():
+    payload = _normalize_job_update_payload(body.model_dump(exclude_unset=True))
+    for field, value in payload.items():
         setattr(job, field, value)
 
     await db.flush()

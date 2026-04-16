@@ -1,6 +1,9 @@
 # Secrets — keep .env.example only
 .env
 
+# Bind-mounted Docker data (profile + config — personal / local)
+data/
+
 # Python
 __pycache__/
 *.py[cod]

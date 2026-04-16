@@ -6,7 +6,7 @@ This extension automates scanning job search result pages on **LinkedIn** (`link
 
 **Starting a scan (two paths):** (1) **Web app — Jobs page** — `POST /extension/trigger-scan` with body `{"website":"linkedin"|"indeed"|"glassdoor"}` (and optional **`scan_all`**, **`scan_all_position`**, **`scan_all_total`** for **Scan All**). The backend stores the request on **`extension_state`**; **`background/poll.js`** polls **`GET /extension/pending-scan` every 3s** and calls `handleManualScan({ websiteOverride, scan_all, scan_all_position, scan_all_total })` when `pending` is true. **Scan All** sends metadata so each run log row records position/total; the **backend** runs **sync dedup** only after the **last** site completes (not the extension). (2) **Extension popup — Scan Now** — sends **`MANUAL_SCAN`** with no override; `handleManualScan()` runs with `effectiveWebsite` from config only (no Scan All metadata).
 
-The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. **Dedup** runs on the server (`POST /jobs/dedup` or automatic after run completion when `dedup_mode` is sync). The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, nested **`glassdoor`**, **`dedup_mode`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history and dedup reports live in the **web app** (**Logs**); the extension does not render those UIs.
+The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. **Dedup** runs on the server (`POST /jobs/dedup` or automatic after run completion when `dedup_mode` is sync). **Matching** (CPU/LLM job-description extraction, gates, scoring) is **web-app only**: open the **Matching** page in the JHA UI (`/matching`), which calls `POST /jobs/match` (queued on the server) and polls match reports — the extension does not invoke those endpoints. **Issue reports** (flag on job cards → `POST /jobs/{id}/report`) and the **Logs → Reports** tab are also **web-app only**. The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, nested **`glassdoor`**, **`dedup_mode`**, **`llm`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history, dedup reports, pipeline match reports, and issue reports live in the **web app** (**Logs**); the extension does not render those UIs.
 
 ## Architecture
 
@@ -57,6 +57,7 @@ extension/
 │       └── init.js                  Manual: scanInProgress + scanConfig.website===glassdoor → scan + scanComplete; else optional debounced auto-scan (GET_CONFIG, SCAN_STARTED, SCAN_COMPLETE)
 └── popup/
     ├── popup.html                   Extension toolbar popup UI
+    ├── popup.css                    Popup layout and typography
     └── popup.js                     Settings save/load, MANUAL_SCAN / STOP_SCAN, progress polling
 ```
 
