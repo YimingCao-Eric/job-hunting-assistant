@@ -68,15 +68,6 @@ async function init() {
   }
   if (!storage.scanInProgress) return;
 
-  const session = checkSession();
-  if (session !== "live") {
-    await new Promise((resolve) =>
-      chrome.runtime.sendMessage({ type: "SESSION_ERROR", error: session }, resolve)
-    );
-    await chrome.storage.local.set({ scanInProgress: false });
-    return;
-  }
-
   let config = storage.scanConfig;
   if (!config) {
     console.log("[JHA-Indeed] no scanConfig — exiting");
@@ -127,6 +118,58 @@ async function init() {
   );
   const tabId = tabResult?.id;
 
+  const { debugLog: dbgBefore } = await chrome.storage.local.get("debugLog");
+  const continuing =
+    dbgBefore &&
+    dbgBefore.runId === config.runId &&
+    dbgBefore.scanStartMs != null;
+  await JhaDebug.init(config.runId, Date.now());
+
+  if (!continuing) {
+    await JhaDebug.emit("scan_start", {
+      runId: config.runId,
+      tabId,
+      source: "indeed",
+      keyword: config.indeed_keyword || config.keyword,
+      location: config.indeed_location || config.location,
+    });
+  }
+
+  const session = checkSession();
+  await JhaDebug.emit("session_check", {
+    result: session,
+    cookie_length: document.cookie.length,
+    has_indeed_session_cookies:
+      document.cookie.includes("CTK") ||
+      document.cookie.includes("INDEED_CSRF_TOKEN"),
+  });
+  if (session !== "live") {
+    await new Promise((resolve) =>
+      chrome.runtime.sendMessage({ type: "SESSION_ERROR", error: session }, resolve)
+    );
+    await JhaDebug.emit(
+      "error",
+      { where: "indeed_session", message: String(session) },
+      "error"
+    );
+    await JhaDebug.finalize();
+    hideScanOverlay();
+    await chrome.storage.local.set({ scanInProgress: false });
+    return;
+  }
+
+  const heartbeatInterval = setInterval(async () => {
+    try {
+      const { _keepalive } = await chrome.storage.local.get("_keepalive");
+      await JhaDebug.emit("heartbeat", {
+        url: location.href,
+        storage_keepalive_age_ms: _keepalive ? Date.now() - _keepalive : null,
+      });
+    } catch (_) {
+      /* never throw */
+    }
+  }, 10000);
+
   try {
     const { scanPageState } = await chrome.storage.local.get("scanPageState");
     const state =
@@ -135,10 +178,29 @@ async function init() {
         chrome.runtime.sendMessage({ type: "GET_EXTENSION_STATE" }, resolve)
       ));
 
+    await JhaDebug.emit("page_load", {
+      url: location.href,
+      current_page: state.current_page,
+      state_source: scanPageState ? "storage" : "backend",
+    });
+    JhaDebug.setPage(state.current_page || 1);
+
     const summary = await runSinglePage(config, state);
 
     if (summary.done) {
       hideScanOverlay();
+      await JhaDebug.emit("scan_end", {
+        summary: {
+          scraped: summary.scraped,
+          new_jobs: summary.new_jobs,
+          existing: summary.existing,
+          stale_skipped: summary.stale_skipped,
+          jd_failed: summary.jd_failed,
+          pages_scanned: summary.pages_scanned,
+          errors_count: (summary.errors || []).length,
+        },
+      });
+      await JhaDebug.finalize();
       await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
       await chrome.storage.local.set({
         scanInProgress: false,
@@ -148,6 +210,16 @@ async function init() {
   } catch (e) {
     console.error("[JHA-Indeed] Scan error:", e);
     hideScanOverlay();
+    await JhaDebug.emit(
+      "error",
+      {
+        where: "indeed_init",
+        message: e.message,
+        stack: e.stack,
+      },
+      "error"
+    );
+    await JhaDebug.finalize();
     await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
     await chrome.storage.local.set({
       scanInProgress: false,
@@ -167,6 +239,8 @@ async function init() {
         completedAt: Date.now(),
       },
     });
+  } finally {
+    clearInterval(heartbeatInterval);
   }
 }
 

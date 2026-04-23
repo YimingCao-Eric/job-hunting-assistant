@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from core.auth import get_current_user
 from core.config import settings
@@ -10,6 +11,7 @@ from dedup.service import resolve_dedup_chains_in_db, run_dedup
 from models.dedup_report import DedupReport
 from models.scraped_job import ScrapedJob
 from schemas.config import SearchConfigRead
+from schemas.debug_log import DebugLogAppend
 from schemas.dedup import DedupReportRead, GateResult
 
 router = APIRouter(tags=["dedup"])
@@ -46,6 +48,7 @@ def _report_to_read(r: DedupReport) -> DedupReportRead:
         gate_results=gate_results,
         skip_reason_counts=dict(r.skip_reason_counts or {}),
         duration_ms=r.duration_ms,
+        debug_log=r.debug_log,
         created_at=r.created_at,
     )
 
@@ -117,3 +120,26 @@ async def get_dedup_report(
     if r is None:
         raise HTTPException(status_code=404, detail="Dedup report not found")
     return _report_to_read(r)
+
+
+@router.post("/dedup/reports/{report_id}/debug")
+async def append_dedup_debug_log(
+    report_id: int,
+    payload: DebugLogAppend,
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    row = await db.get(DedupReport, report_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="dedup report not found")
+    existing = (row.debug_log or {}).get("events", [])
+    if not isinstance(existing, list):
+        existing = []
+    new_events = [e.model_dump(mode="json") for e in payload.events]
+    combined = [*existing, *new_events]
+    if len(combined) > settings.debug_log_ring_size:
+        combined = combined[-settings.debug_log_ring_size :]
+    row.debug_log = {"events": combined}
+    flag_modified(row, "debug_log")
+    await db.commit()
+    return {"ok": True, "total_events": len(combined), "accepted": len(payload.events)}

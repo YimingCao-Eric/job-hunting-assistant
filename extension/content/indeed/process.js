@@ -45,7 +45,31 @@ async function processCard(anchor, config, counters) {
     return { skipped: true };
   }
 
+  const gqlStart = Date.now();
   const jdResult = await fetchIndeedJD(cardData.jk);
+
+  const gqlResultType = !jdResult
+    ? "null"
+    : jdResult.rateLimited
+      ? "rate_limited"
+      : jdResult.phantom
+        ? "phantom"
+        : jdResult.jd
+          ? "jd_ok"
+          : "unknown";
+
+  await JhaDebug.emit(
+    "indeed_graphql",
+    {
+      jk: cardData.jk,
+      took_ms: Date.now() - gqlStart,
+      result_type: gqlResultType,
+      jd_len: jdResult?.jd?.length || 0,
+      http_status: jdResult?.http_status ?? null,
+      has_indeed_key: !!document.head.getAttribute("data-jha-api-key"),
+    },
+    gqlResultType === "jd_ok" ? "info" : "warn"
+  );
 
   if (jdResult && jdResult.phantom) {
     // Phantom jk — not a real job, skip silently like a stale card
@@ -72,6 +96,7 @@ async function processCard(anchor, config, counters) {
   const easyApply = detectIndeedEasyApply();
   const applyUrl = easyApply ? null : cardData.job_url;
 
+  const ingStart = Date.now();
   const result = await ingestJob({
     website: "indeed",
     job_title: cardData.job_title,
@@ -89,6 +114,32 @@ async function processCard(anchor, config, counters) {
     },
     scan_run_id: config.runId,
   });
+
+  const resultType = !result
+    ? "no_response"
+    : result.error
+      ? "error"
+      : !result.id
+        ? "rejected"
+        : result.already_exists
+          ? "existing"
+          : result.content_duplicate
+            ? "content_duplicate"
+            : "new";
+
+  await JhaDebug.emit(
+    "ingest",
+    {
+      jk: cardData.jk,
+      title: cardData.job_title,
+      company: cardData.company,
+      took_ms: Date.now() - ingStart,
+      result_type: resultType,
+      result_error: result?.error || null,
+      http_status: result?.http_status || null,
+    },
+    result && result.id ? "info" : "warn"
+  );
 
   if (!result) {
     counters.jd_failed++;

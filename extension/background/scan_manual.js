@@ -52,7 +52,7 @@ async function handleManualScan(options = {}) {
   const effectiveWebsite =
     websiteOverride || config.website || "linkedin";
 
-  let f_tpr = await computeFtpr(config.f_tpr_bound);
+  let f_tpr = await computeFtpr(config.f_tpr_bound, effectiveWebsite);
   const liHours = parseInt(String(config.linkedin_f_tpr ?? "").trim(), 10);
   if (!Number.isNaN(liHours) && liHours > 0) {
     f_tpr = `r${liHours * 3600}`;

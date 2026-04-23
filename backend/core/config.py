@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     profile_path: str = "/app/data/profile.json"
     extension_origin_regex: str = r"^chrome-extension://[a-zA-Z0-9]+$"
     dedup_cosine_batch_size: int = 1000
+    debug_log_ring_size: int = 10000
 
 
 settings = Settings()

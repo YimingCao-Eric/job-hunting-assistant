@@ -1,166 +1,333 @@
-/* ── LinkedIn multi-page scan (pagination via URL) ─────────────────────── */
+/* ── LinkedIn in-SPA pagination scan (single long-running invocation) ── */
 
-function buildLinkedInSearchUrl(config, startOffset) {
-  const params = new URLSearchParams({
-    keywords: config.keyword,
-    location: config.location,
+async function emitPageEnd(counters, currentPage, done) {
+  await JhaDebug.emit("page_end", {
+    done,
+    pages_scanned: currentPage,
+    counters: {
+      scraped: counters.scraped,
+      new_jobs: counters.new_jobs,
+      existing: counters.existing,
+      jd_failed: counters.jd_failed,
+      stale_skipped: counters.stale_skipped,
+      errors_count: counters.errors?.length || 0,
+    },
   });
-  const liHours = parseInt(String(config.linkedin_f_tpr ?? "").trim(), 10);
-  let effectiveTpr = null;
-  if (!Number.isNaN(liHours) && liHours > 0) {
-    effectiveTpr = `r${liHours * 3600}`;
-  } else if (config.f_tpr) {
-    effectiveTpr = config.f_tpr;
-  }
-  if (effectiveTpr) params.set("f_TPR", effectiveTpr);
-  if (config.f_experience) params.set("f_E", config.f_experience);
-  if (config.f_job_type) params.set("f_JT", config.f_job_type);
-  if (config.f_remote) params.set("f_WT", config.f_remote);
-  let sb = "";
-  if (config.salary_min) {
-    const salaryBracket = config.salary_min;
-    if (salaryBracket > 0 && salaryBracket >= 40000) {
-      if (salaryBracket < 60000) sb = "1";
-      else if (salaryBracket < 80000) sb = "2";
-      else if (salaryBracket < 100000) sb = "3";
-      else if (salaryBracket < 120000) sb = "4";
-      else if (salaryBracket < 140000) sb = "5";
-      else if (salaryBracket < 160000) sb = "6";
-      else if (salaryBracket < 180000) sb = "7";
-      else if (salaryBracket < 200000) sb = "8";
-      else sb = "9";
-    }
-  }
-  if (sb) params.set("f_SB2", sb);
-  if (startOffset > 0) params.set("start", startOffset);
-  return `https://www.linkedin.com/jobs/search?${params.toString()}`;
 }
 
-async function runSinglePage(config, state, processedJobIds) {
-  const idSet = processedJobIds instanceof Set ? processedJobIds : new Set();
-
+async function runFullScan(config, tabId) {
+  const processedJobIds = new Set();
   const counters = {
-    scraped: state.scraped || 0,
-    new_jobs: state.new_jobs || 0,
-    existing: state.existing || 0,
-    stale_skipped: state.stale_skipped || 0,
-    jd_failed: state.jd_failed || 0,
-    id_skipped: state.id_skipped || 0,
-    errors: state.errors || [],
+    scraped: 0,
+    new_jobs: 0,
+    existing: 0,
+    stale_skipped: 0,
+    jd_failed: 0,
+    id_skipped: 0,
+    errors: [],
   };
-  const currentPage = state.current_page || 1;
+  let currentPage = 1;
 
-  const { stopRequested } = await chrome.storage.local.get("stopRequested");
-  if (stopRequested) {
-    console.log("[JHA] Stop requested — exiting before processing");
-    return {
-      ...counters,
-      pages_scanned: currentPage,
-      done: true,
-    };
-  }
-
-  let cards = await waitForCards(12000);
-  if (cards.length === 0) {
-    console.log("[JHA] No cards first attempt — retrying in 3s");
-    await sleep(3000);
-    cards = await waitForCards(8000);
-  }
-  if (cards.length === 0) {
-    console.log("[JHA] No cards — exhausted");
-    return {
-      ...counters,
-      pages_scanned: currentPage,
-      done: true,
-    };
-  }
-
-  console.log(`[JHA] Page ${currentPage}: ${cards.length} cards`);
-
-  for (const card of cards) {
-    const { stopRequested: stopNow } =
-      await chrome.storage.local.get("stopRequested");
-    if (stopNow) {
-      console.log("[JHA] Stop requested — exiting scan");
-      return {
-        ...counters,
-        pages_scanned: currentPage,
-        done: true,
-      };
-    }
-
-    const jobId = card.getAttribute("data-occludable-job-id");
-    if (!jobId) continue;
-
-    if (idSet.has(jobId)) {
-      console.log(`[JHA-LinkedIn] Skipping duplicate job id: ${jobId}`);
-      continue;
-    }
-    idSet.add(jobId);
-
-    const cardData = extractCardData(card);
-    if (!cardData || !cardData.job_id) continue;
-
-    await processCard(card, config, counters, cardData);
-  }
-
-  window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
-  await sleep(500);
-
-  await new Promise((resolve) =>
-    chrome.runtime.sendMessage(
-      {
-        type: "PUT_EXTENSION_STATE",
-        data: {
-          current_page: currentPage + 1,
-          today_searches: (state.today_searches || 0) + 1,
-        },
-      },
-      resolve
-    )
+  let mutationCount = 0;
+  let mutationObserver = null;
+  const cardListEl = document.querySelector(
+    ".scaffold-layout__list, .jobs-search-results-list"
   );
+  if (cardListEl) {
+    mutationObserver = new MutationObserver((mutations) => {
+      mutationCount += mutations.length;
+    });
+    mutationObserver.observe(cardListEl, { childList: true, subtree: true });
+  }
 
-  let nextBtn = null;
+  try {
+    while (true) {
+      JhaDebug.setPage(currentPage);
+
+      const { stopRequested } = await chrome.storage.local.get("stopRequested");
+      if (stopRequested) {
+        await JhaDebug.emit("pagination_ended", {
+          type: "pagination_ended",
+          page: currentPage,
+          reason: "stop_requested",
+          url: location.href,
+        });
+        await emitPageEnd(counters, currentPage, true);
+        break;
+      }
+
+      await JhaDebug.emit("page_start", {
+        url: location.href,
+        current_page: currentPage,
+        has_currentJobId: /[?&]currentJobId=/.test(location.href),
+        has_trailing_slash_before_query: /\/jobs\/search\/\?/.test(
+          location.href
+        ),
+      });
+
+      const isFirstPage = currentPage === 1;
+      const waitStart = Date.now();
+      let cards = await waitForCards(isFirstPage ? 12000 : 8000);
+      await JhaDebug.emit("cards_found", {
+        attempt: 1,
+        count: cards.length,
+        took_ms: Date.now() - waitStart,
+        first_page: isFirstPage,
+        ...(cards.length < 25
+          ? {
+              doc_title: document.title,
+              has_no_results_banner: !!document.querySelector(
+                ".jobs-search-no-results-banner"
+              ),
+              body_cards_total: document.querySelectorAll(
+                "li[data-occludable-job-id]"
+              ).length,
+            }
+          : {}),
+      });
+
+      if (cards.length === 0) {
+        await JhaDebug.emit("cards_found", {
+          attempt: 2,
+          reason: "retry_after_3s",
+          count: 0,
+        });
+        await sleep(3000);
+        const retryStart = Date.now();
+        cards = await waitForCards(8000);
+        await JhaDebug.emit("cards_found", {
+          attempt: 2,
+          count: cards.length,
+          took_ms: Date.now() - retryStart,
+        });
+      }
+
+      if (cards.length === 0) {
+        const pe = {
+          type: "pagination_ended",
+          page: currentPage,
+          reason: "no_cards_found",
+          url: location.href,
+          doc_title: document.title,
+          body_snippet: document.body.innerText.slice(0, 300),
+          has_no_results_banner: !!document.querySelector(
+            ".jobs-search-no-results-banner"
+          ),
+          has_auth_wall: !!document.querySelector(".authwall"),
+        };
+        pushScanError(counters, pe);
+        await JhaDebug.emit("pagination_ended", pe);
+        await emitPageEnd(counters, currentPage, true);
+        break;
+      }
+
+      console.log(`[JHA] Page ${currentPage}: ${cards.length} cards`);
+
+      for (let idx = 0; idx < cards.length; idx++) {
+        const card = cards[idx];
+        const { stopRequested: stopNow } =
+          await chrome.storage.local.get("stopRequested");
+        if (stopNow) {
+          await JhaDebug.emit("pagination_ended", {
+            type: "pagination_ended",
+            page: currentPage,
+            reason: "stop_requested_mid_page",
+            url: location.href,
+          });
+          await emitPageEnd(counters, currentPage, true);
+          return { ...counters, pages_scanned: currentPage };
+        }
+
+        const jobId = card.getAttribute("data-occludable-job-id");
+        await JhaDebug.emit("card_process", {
+          job_id: jobId || null,
+          idx_on_page: idx,
+          duplicate_in_set: !!(jobId && processedJobIds.has(jobId)),
+        });
+        if (!jobId) continue;
+        if (processedJobIds.has(jobId)) {
+          console.log(`[JHA-LinkedIn] Skipping duplicate job id: ${jobId}`);
+          continue;
+        }
+        processedJobIds.add(jobId);
+
+        const cardData = extractCardData(card);
+        if (!cardData || !cardData.job_id) continue;
+
+        await processCard(card, config, counters, cardData);
+      }
+
+      await emitPageEnd(counters, currentPage, false);
+
+      await new Promise((resolve) =>
+        chrome.runtime.sendMessage(
+          {
+            type: "PUT_EXTENSION_STATE",
+            data: {
+              current_page: currentPage + 1,
+              today_searches: currentPage,
+            },
+          },
+          resolve
+        )
+      );
+
+      await JhaDebug.emit("dom_mutations", {
+        page: currentPage,
+        count: mutationCount,
+      });
+      mutationCount = 0;
+
+      await JhaDebug.emit("scroll", {
+        scroll_height: document.body.scrollHeight,
+        viewport: window.innerHeight,
+      });
+      for (const sel of PAGINATION_CONTAINER_SELECTORS) {
+        const el = document.querySelector(sel);
+        if (el) {
+          el.scrollIntoView({ behavior: "instant", block: "end" });
+          break;
+        }
+      }
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+
+      const nextBtn = await pollForNextButton();
+      const nextDisabled =
+        nextBtn &&
+        (nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true");
+
+      if (!nextBtn || nextDisabled) {
+        const pe = {
+          type: "pagination_ended",
+          page: currentPage,
+          reason: nextBtn ? "next_button_disabled" : "next_button_not_found",
+          url: location.href,
+          doc_title: document.title,
+          cards_on_page: document.querySelectorAll(
+            "li[data-occludable-job-id]"
+          ).length,
+          has_no_results_banner: !!document.querySelector(
+            ".jobs-search-no-results-banner"
+          ),
+          selectors_tried: NEXT_BUTTON_SELECTORS.length,
+        };
+        pushScanError(counters, pe);
+        await JhaDebug.emit("pagination_ended", pe);
+        await emitPageEnd(counters, currentPage, true);
+        break;
+      }
+
+      const urlBefore = location.href;
+      const lastCardIdsBefore = getCurrentCardIdSet();
+
+      await JhaDebug.emit("next_click", {
+        page: currentPage,
+        url_before: urlBefore,
+        selector_matched: findMatchingSelector(nextBtn),
+      });
+      nextBtn.click();
+
+      const spaStart = Date.now();
+      const transitioned = await waitForSpaTransition(
+        urlBefore,
+        lastCardIdsBefore,
+        10000
+      );
+      await JhaDebug.emit("spa_transition", {
+        page: currentPage,
+        took_ms: Date.now() - spaStart,
+        transitioned,
+        url_after: location.href,
+        url_mutated: location.href !== urlBefore,
+        added_currentJobId:
+          !/[?&]currentJobId=/.test(urlBefore) &&
+          /[?&]currentJobId=/.test(location.href),
+      });
+
+      if (!transitioned) {
+        const pe = {
+          type: "pagination_ended",
+          page: currentPage,
+          reason: "spa_transition_timeout",
+          url: location.href,
+          url_before: urlBefore,
+        };
+        pushScanError(counters, pe);
+        await JhaDebug.emit("pagination_ended", pe);
+        await emitPageEnd(counters, currentPage, true);
+        break;
+      }
+
+      currentPage++;
+    }
+  } finally {
+    if (mutationObserver) mutationObserver.disconnect();
+  }
+
+  return { ...counters, pages_scanned: currentPage };
+}
+
+async function pollForNextButton(maxMs = 5000, intervalMs = 300) {
+  const start = Date.now();
+  let iter = 0;
+  while (Date.now() - start < maxMs) {
+    iter++;
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+    await sleep(intervalMs);
+    for (const sel of NEXT_BUTTON_SELECTORS) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        await JhaDebug.emit("next_poll", {
+          iter,
+          found: true,
+          selector_matched: sel,
+          elapsed_ms: Date.now() - start,
+        });
+        return btn;
+      }
+    }
+    await JhaDebug.emit("next_poll", {
+      iter,
+      found: false,
+      elapsed_ms: Date.now() - start,
+    });
+  }
+  return null;
+}
+
+async function waitForSpaTransition(urlBefore, cardIdsBefore, maxMs = 10000) {
+  const start = Date.now();
+  const checkIntervalMs = 250;
+  while (Date.now() - start < maxMs) {
+    await sleep(checkIntervalMs);
+    if (location.href !== urlBefore) return true;
+    const currentCardIds = getCurrentCardIdSet();
+    if (!cardIdSetsEqual(currentCardIds, cardIdsBefore)) return true;
+  }
+  return false;
+}
+
+function getCurrentCardIdSet() {
+  const s = new Set();
+  for (const el of document.querySelectorAll("li[data-occludable-job-id]")) {
+    s.add(el.getAttribute("data-occludable-job-id"));
+  }
+  return s;
+}
+
+function cardIdSetsEqual(a, b) {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+function findMatchingSelector(btn) {
   for (const sel of NEXT_BUTTON_SELECTORS) {
-    nextBtn = document.querySelector(sel);
-    if (nextBtn) break;
+    try {
+      if (btn.matches(sel)) return sel;
+    } catch {
+      /* invalid selector */
+    }
   }
-  if (
-    !nextBtn ||
-    nextBtn.disabled ||
-    nextBtn.getAttribute("aria-disabled") === "true"
-  ) {
-    console.log("[JHA] No Next button — last page");
-    return {
-      ...counters,
-      pages_scanned: currentPage,
-      done: true,
-    };
-  }
-
-  await chrome.storage.local.set({
-    scanPageState: {
-      ...counters,
-      current_page: currentPage + 1,
-      today_searches: (state.today_searches || 0) + 1,
-      processed_job_ids: Array.from(idSet),
-    },
-    liveProgress: { ...counters, page: currentPage + 1 },
-  });
-
-  const nextOffset = currentPage * 25;
-  const nextUrl = buildLinkedInSearchUrl(config, nextOffset);
-
-  await new Promise((resolve) =>
-    chrome.runtime.sendMessage(
-      { type: "NAVIGATE_SCAN_TAB", url: nextUrl },
-      resolve
-    )
-  );
-
-  return {
-    ...counters,
-    pages_scanned: currentPage,
-    done: false,
-  };
+  return "(none)";
 }

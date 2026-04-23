@@ -18,6 +18,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = sender.tab.id;
       const cid = message.correlationId;
       (async () => {
+        const runId = message.job?.scan_run_id;
         try {
           const result = await handleIngest(message.job);
           chrome.tabs
@@ -29,6 +30,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             .catch(() => {});
         } catch (e) {
           console.error("[JHA] handleIngest failed:", e.message);
+          if (runId) {
+            emitBackgroundEvent(runId, "ingest_throw", { error: e.message }, "warn");
+          }
           chrome.tabs
             .sendMessage(tabId, {
               type: "INGEST_JOB_RESULT",
@@ -75,6 +79,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+  if (message.type === "DEBUG_LOG_FLUSH") {
+    (async () => {
+      const result = await handleDebugLogFlush(message.runId, message.events);
+      sendResponse(result);
+    })();
+    return true;
+  }
   if (message.type === "PUT_EXTENSION_STATE") {
     (async () => {
       const { backendUrl, authToken } = await getSettings();
@@ -104,13 +115,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "NAVIGATE_SCAN_TAB") {
     (async () => {
+      const { scanConfig } = await chrome.storage.local.get("scanConfig");
+      const runId = scanConfig?.runId;
       try {
         const tabId = sender.tab?.id;
         if (tabId) {
           await chrome.tabs.update(tabId, { url: message.url });
+          if (runId) {
+            await emitBackgroundEvent(
+              runId,
+              "navigate_tab",
+              { url: message.url, ok: true },
+              "info"
+            );
+          }
         }
         sendResponse({ ok: true });
       } catch (e) {
+        if (runId) {
+          await emitBackgroundEvent(
+            runId,
+            "navigate_tab",
+            { url: message.url, ok: false, error: e.message },
+            "warn"
+          );
+        }
         sendResponse({ ok: false, error: e.message });
       }
     })();

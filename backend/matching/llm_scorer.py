@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 from openai import AsyncOpenAI
 
+from core.trace import JhaTrace, emit_llm_trace_event
 from matching.constants import LLM_SCORE_MODEL
 from matching.normaliser import normalise_list
 from models.scraped_job import ScrapedJob
@@ -47,15 +49,7 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
         raise
 
 
-async def llm_score_job(
-    job: ScrapedJob,
-    profile: dict,
-    config: dict,
-    client: AsyncOpenAI,
-) -> dict[str, Any]:
-    """
-    Returns keys: match_level, match_reason, blocking_gap, gap_adjacency, confidence.
-    """
+def build_llm_score_prompt(job: ScrapedJob, profile: dict) -> str:
     ext = profile.get("_extracted") or {}
     raw_skills = (ext.get("skills") or []) + (profile.get("extra_skills") or [])
     if isinstance(raw_skills, dict):
@@ -87,7 +81,7 @@ async def llm_score_job(
     cov_pct = round((job.req_coverage or 0) * 100)
     yoe_prof = ext.get("yoe", "unknown")
 
-    prompt = f"""You are a hiring manager reviewing a candidate for this role.
+    return f"""You are a hiring manager reviewing a candidate for this role.
 Be calibrated and realistic — not optimistic. Assume a competitive market.
 
 ROLE (from JD):
@@ -130,39 +124,112 @@ Definitions:
   stretch_match:  Might advance if candidate pool is thin; meaningful gap(s)
   weak_match:     Would not advance; fundamental gap or seniority mismatch"""
 
-    msg = await client.chat.completions.create(
-        model=LLM_SCORE_MODEL,
-        max_tokens=600,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        timeout=120.0,
-    )
-    raw_text = (msg.choices[0].message.content or "").strip()
-    result = _parse_json_object(raw_text)
 
-    valid_levels = {"strong_match", "possible_match", "stretch_match", "weak_match"}
-    level = result.get("match_level")
-    if level not in valid_levels:
-        raise ValueError(f"Invalid match_level: {level!r}")
+async def llm_score_job(
+    job: ScrapedJob,
+    profile: dict,
+    config: dict,
+    client: AsyncOpenAI,
+    llm_trace_sink: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Returns keys: match_level, match_reason, blocking_gap, gap_adjacency, confidence.
+    """
+    prompt = build_llm_score_prompt(job, profile)
+    t0 = time.monotonic()
+    token_in: int | None = None
+    token_out: int | None = None
+    outcome = "ok"
+    parse_ok = True
+    error_class: str | None = None
+    error_msg: str | None = None
+    match_level_out: str | None = None
 
-    bg = result.get("blocking_gap")
-    if bg is not None and isinstance(bg, str) and bg.lower() in ("null", "none", ""):
-        bg = None
+    if llm_trace_sink is None:
+        JhaTrace.emit(
+            "llm_score_start",
+            {
+                "stage": "llm_score",
+                "job_id": str(job.id),
+                "model": LLM_SCORE_MODEL,
+                "prompt_len": len(prompt),
+            },
+        )
 
-    ga = result.get("gap_adjacency")
-    if ga is None:
-        ga = []
-    if not isinstance(ga, list):
-        ga = []
+    try:
+        msg = await client.chat.completions.create(
+            model=LLM_SCORE_MODEL,
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            timeout=120.0,
+        )
+        if hasattr(msg, "usage") and msg.usage:
+            token_in = getattr(msg.usage, "prompt_tokens", None)
+            token_out = getattr(msg.usage, "completion_tokens", None)
+        raw_text = (msg.choices[0].message.content or "").strip()
+        result = _parse_json_object(raw_text)
 
-    conf = result.get("confidence")
-    if conf not in ("high", "medium", "low"):
-        conf = "medium"
+        valid_levels = {"strong_match", "possible_match", "stretch_match", "weak_match"}
+        level = result.get("match_level")
+        if level not in valid_levels:
+            raise ValueError(f"Invalid match_level: {level!r}")
 
-    return {
-        "match_level": level,
-        "match_reason": str(result.get("match_reason") or "").strip(),
-        "blocking_gap": bg,
-        "gap_adjacency": ga,
-        "confidence": conf,
-    }
+        bg = result.get("blocking_gap")
+        if bg is not None and isinstance(bg, str) and bg.lower() in ("null", "none", ""):
+            bg = None
+
+        ga = result.get("gap_adjacency")
+        if ga is None:
+            ga = []
+        if not isinstance(ga, list):
+            ga = []
+
+        conf = result.get("confidence")
+        if conf not in ("high", "medium", "low"):
+            conf = "medium"
+
+        match_level_out = level
+        return {
+            "match_level": level,
+            "match_reason": str(result.get("match_reason") or "").strip(),
+            "blocking_gap": bg,
+            "gap_adjacency": ga,
+            "confidence": conf,
+        }
+    except Exception as e:
+        outcome = "fail"
+        parse_ok = False
+        error_class = type(e).__name__
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        if llm_trace_sink is not None:
+            llm_trace_sink.append(
+                {
+                    "duration_ms": int((time.monotonic() - t0) * 1000),
+                    "token_in": token_in,
+                    "token_out": token_out,
+                    "outcome": outcome,
+                    "parse_ok": parse_ok,
+                    "error_class": error_class,
+                    "error_msg": error_msg,
+                    "model": LLM_SCORE_MODEL,
+                    "match_level": match_level_out,
+                }
+            )
+        else:
+            emit_llm_trace_event(
+                phase="llm_score_done",
+                model=LLM_SCORE_MODEL,
+                t0_monotonic=t0,
+                job_id=str(job.id),
+                outcome=outcome,
+                parse_ok=parse_ok,
+                retries=0,
+                token_in=token_in,
+                token_out=token_out,
+                error_class=error_class,
+                error_msg=error_msg,
+                extra={"match_level": match_level_out} if match_level_out else None,
+            )

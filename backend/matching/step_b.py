@@ -82,7 +82,6 @@ async def run_step_b_extraction(
             job.visa_req = data.get("visa_req")
             job.required_skills = data.get("required_skills") or []
             job.nice_to_have_skills = data.get("nice_to_have_skills") or []
-            job.other_notes = data.get("other_notes")
             job.jd_incomplete = bool(data.get("jd_incomplete", False))
             job.matching_mode = mode
             job.matched_at = datetime.now(timezone.utc)

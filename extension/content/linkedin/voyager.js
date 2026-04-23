@@ -42,16 +42,17 @@ async function fetchCompanyName(companyUrn, csrfToken) {
 }
 
 /**
- * Fetches JD from Voyager; up to 2 attempts with 500ms between tries (single
- * function — avoids a separate outer retry + long sleep that worsened SW suspension).
+ * Fetches JD from Voyager; up to 2 attempts with 500ms between tries.
+ * Returns { jd, ... } on success, or { error, status } on failure (G3).
  */
 async function fetchJDViaVoyager(jobId) {
   const csrfToken = getCsrfToken();
   console.log(
     `[JHA] Voyager ${jobId}: csrfToken=${csrfToken ? "present" : "MISSING"}`
   );
-  if (!csrfToken) return null;
+  if (!csrfToken) return { error: "no_csrf", status: null };
 
+  let lastStatus = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const res = await fetch(
@@ -66,17 +67,18 @@ async function fetchJDViaVoyager(jobId) {
           },
         }
       );
+      lastStatus = res.status;
       console.log(`[JHA] Voyager ${jobId}: status=${res.status}`);
       if (res.status === 429 || res.status === 403 || res.status === 999) {
-        return null;
+        return { error: `http_${res.status}`, status: res.status };
       }
       if (!res.ok) {
         console.warn(`[JHA] Voyager ${jobId}: non-ok status ${res.status}`);
         if (attempt === 1) {
-          await new Promise((r) => setTimeout(r, 500));
+          await sleep(500);
           continue;
         }
-        return null;
+        return { error: `http_${res.status}`, status: res.status };
       }
       const data = await res.json();
       const jdRaw =
@@ -109,6 +111,7 @@ async function fetchJDViaVoyager(jobId) {
             data?.data?.originalListedAt || data?.data?.listedAt || null,
           company: companyName,
           easy_apply,
+          status: res.status,
         };
       }
 
@@ -116,18 +119,18 @@ async function fetchJDViaVoyager(jobId) {
         `[JHA-LinkedIn] fetchJDViaVoyager: short/empty JD for ${jobId} (len=${trimmed.length}) — will retry`
       );
       if (attempt === 1) {
-        await new Promise((r) => setTimeout(r, 500));
+        await sleep(500);
         continue;
       }
-      return null;
+      return { error: "empty_jd", status: res.status };
     } catch (e) {
       console.error(`[JHA] Voyager ${jobId}: fetch threw: ${e.message}`);
       if (attempt === 1) {
-        await new Promise((r) => setTimeout(r, 500));
+        await sleep(500);
         continue;
       }
-      return null;
+      return { error: `fetch_threw: ${e.message}`, status: lastStatus };
     }
   }
-  return null;
+  return { error: "unknown", status: lastStatus };
 }

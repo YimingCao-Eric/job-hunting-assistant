@@ -17,10 +17,9 @@ async function waitForCards(timeoutMs = 8000) {
     await sleep(300);
     const cards = getCards(true);
     const count = cards.length;
-    if (count >= 25) return cards;
     if (count > 0 && count === lastCount) {
       stableFor += 300;
-      if (stableFor >= 1000) return cards;
+      if (stableFor >= 600) return cards;
     } else {
       stableFor = 0;
     }
@@ -99,4 +98,3 @@ function extractCardData(card) {
     easy_apply,
   };
 }
-

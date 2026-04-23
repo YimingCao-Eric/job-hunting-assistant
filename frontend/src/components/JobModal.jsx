@@ -96,9 +96,7 @@ export default function JobModal({ job, onClose }) {
   const salaryMin =
     job.extracted_salary_min != null && job.extracted_salary_min !== ''
       ? Number(job.extracted_salary_min)
-      : job.salary_min_extracted != null
-        ? Number(job.salary_min_extracted)
-        : null
+      : null
 
   const visaLabel = visaDisplayLabel(job.visa_req, needsSponsorship)
   const fitParts = fitScoreDisplayParts(job.fit_score)
@@ -241,15 +239,6 @@ export default function JobModal({ job, onClose }) {
                     <span className={s.metaValue}>{row.value}</span>
                   </Fragment>
                 ))}
-              </div>
-            )}
-
-            {job.other_notes && (
-              <div className={s.extractedSection} style={{ marginTop: '12px' }}>
-                <div className={s.extractedSectionLabel}>NOTES</div>
-                <p style={{ fontSize: '13px', color: '#444444', margin: 0, lineHeight: '1.5' }}>
-                  {job.other_notes}
-                </p>
               </div>
             )}
 

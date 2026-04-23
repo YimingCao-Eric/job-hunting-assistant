@@ -15,11 +15,16 @@ const LABELS = {
   weak_match: 'Weak',
 }
 
-export default function MatchBadge({ job }) {
+/**
+ * @param {{ job: object, showLevelBadge?: boolean }} props
+ * When showLevelBadge is false, fit % still shows; Strong/Weak/etc. and confidence dot are hidden.
+ */
+export default function MatchBadge({ job, showLevelBadge = false }) {
   const level = job.match_level
-  if (!level) return null
   const fitParts = fitScoreDisplayParts(job.fit_score)
-  const confidence = job.match_confidence || job.confidence
+  const showLevel = Boolean(showLevelBadge && level)
+  if (!showLevel && !fitParts) return null
+  const confidence = job.match_confidence
   const badgeClass = s[`badge_${level}`] || s.badge_weak_match
   const dotClass =
     confidence === 'high'
@@ -31,16 +36,23 @@ export default function MatchBadge({ job }) {
           : ''
   return (
     <div className={s.matchFooter}>
-      <span className={`${s.matchBadge} ${badgeClass}`}>
-        {ICONS[level]}{' '}
-        {LABELS[level] || level}
-      </span>
+      {showLevel
+        ? (
+            <span className={`${s.matchBadge} ${badgeClass}`}>
+              {ICONS[level]}
+              {' '}
+              {LABELS[level] || level}
+            </span>
+          )
+        : null}
       {fitParts && (
-        <span style={{ fontSize: '12px', color: '#666', marginLeft: '6px' }}>
+        <span style={{ fontSize: '12px', color: '#666', marginLeft: showLevel ? '6px' : 0 }}>
           {fitParts.bonus ? `${fitParts.pct}% fit +` : `${fitParts.pct}% fit`}
         </span>
       )}
-      {confidence && dotClass ? <span className={`${s.confidenceDot} ${dotClass}`} /> : null}
+      {showLevelBadge && confidence && dotClass
+        ? <span className={`${s.confidenceDot} ${dotClass}`} />
+        : null}
     </div>
   )
 }

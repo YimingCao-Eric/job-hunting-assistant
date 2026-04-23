@@ -6,10 +6,12 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.trace import JhaTrace, emit_llm_trace_event
 from matching.constants import (
     EDUCATION_PATTERNS,
     MATCHING_MODEL,
@@ -259,7 +261,6 @@ def cpu_extract_jd(job_title: str, job_description: str | None, aliases: dict[st
         "visa_req": visa,
         "required_skills": req_skills,
         "nice_to_have_skills": nice_skills,
-        "other_notes": None,
         "jd_incomplete": jd_incomplete,
     }
 
@@ -334,22 +335,11 @@ Fields:
     Only if JD explicitly marks preferred/bonus/nice-to-have. Otherwise [].
     If a skill is both, keep only in required_skills.
 
-  other_notes:
-    string or null.
-    1–2 sentences maximum.
-    Capture only application-relevant information NOT already covered by
-    the structured fields above. Focus on what would help a motivated
-    candidate decide whether to click Apply.
-    Examples: unusual application process, compensation structure beyond
-    base salary, team context, work schedule constraints, company stage.
-    DO NOT repeat skills, salary, education, or visa information.
-    null if nothing notable beyond the structured fields.
-
   jd_incomplete: boolean — true if after extraction you found no skills and no yoe_required.
 
 JSON keys MUST be exactly:
 "yoe_required","salary_min","education_required_degree","education_required_field",
-"education_field_qualified","visa_sponsorship_required","required_skills","nice_to_have_skills","other_notes","jd_incomplete"
+"education_field_qualified","visa_sponsorship_required","required_skills","nice_to_have_skills","jd_incomplete"
 
 Job description:
 {job_description}
@@ -401,6 +391,16 @@ async def llm_extract_jd(
             "[extractor/llm] OPENAI_API_KEY not set — falling back to CPU | job_id=%s",
             jid,
         )
+        _t = time.monotonic()
+        emit_llm_trace_event(
+            phase="llm_extract_done",
+            model=MATCHING_MODEL,
+            t0_monotonic=_t,
+            job_id=job_id,
+            outcome="cpu_fallback",
+            parse_ok=True,
+            retries=0,
+        )
         return _cpu_fallback()
 
     blob = _jd_blob(job_title, job_description)
@@ -408,6 +408,16 @@ async def llm_extract_jd(
         logger.debug(
             "[extractor/llm] Empty JD blob — using CPU | job_id=%s",
             jid,
+        )
+        _t = time.monotonic()
+        emit_llm_trace_event(
+            phase="llm_extract_done",
+            model=MATCHING_MODEL,
+            t0_monotonic=_t,
+            job_id=job_id,
+            outcome="cpu_fallback",
+            parse_ok=True,
+            retries=0,
         )
         return _cpu_fallback()
 
@@ -439,6 +449,18 @@ async def llm_extract_jd(
             "[extractor/llm] Falling back to CPU | job_id=%s",
             jid,
         )
+        _t = time.monotonic()
+        emit_llm_trace_event(
+            phase="llm_extract_done",
+            model=MATCHING_MODEL,
+            t0_monotonic=_t,
+            job_id=job_id,
+            outcome="cpu_fallback",
+            parse_ok=False,
+            retries=0,
+            error_class=type(e).__name__,
+            error_msg=str(e)[:500],
+        )
         return _cpu_fallback()
 
     data: dict[str, Any] | None = None
@@ -449,6 +471,22 @@ async def llm_extract_jd(
             jid,
             attempt,
         )
+        t0 = time.monotonic()
+        JhaTrace.emit(
+            "llm_extract_start",
+            {
+                "stage": "llm_extract",
+                "job_id": job_id,
+                "model": MATCHING_MODEL,
+                "prompt_len": len(prompt),
+            },
+        )
+        outcome = "ok"
+        parse_ok = True
+        token_in: int | None = None
+        token_out: int | None = None
+        error_class: str | None = None
+        error_msg: str | None = None
         try:
             async with AsyncOpenAI(api_key=api_key) as client:
                 msg = await client.chat.completions.create(
@@ -459,6 +497,9 @@ async def llm_extract_jd(
                     timeout=60.0,
                 )
             logger.info("[extractor/llm] API call returned | job_id=%s", jid)
+            if hasattr(msg, "usage") and msg.usage:
+                token_in = getattr(msg.usage, "prompt_tokens", None)
+                token_out = getattr(msg.usage, "completion_tokens", None)
             choice = msg.choices[0].message
             response_text = (choice.content or "").strip()
             raw_preview = response_text[:300] if response_text else "EMPTY"
@@ -469,15 +510,72 @@ async def llm_extract_jd(
             )
             parsed = _parse_llm_jd_json(response_text)
             if parsed is None:
+                parse_ok = False
                 if attempt == 1:
                     logger.warning(
                         "[extractor/llm] First parse failed, retrying | job_id=%s",
                         jid,
                     )
-                continue
+                    emit_llm_trace_event(
+                        phase="llm_extract_done",
+                        model=MATCHING_MODEL,
+                        t0_monotonic=t0,
+                        job_id=job_id,
+                        outcome="fail",
+                        parse_ok=parse_ok,
+                        retries=0,
+                        token_in=token_in,
+                        token_out=token_out,
+                    )
+                    continue
+                logger.warning(
+                    "[extractor/llm] Falling back to CPU | job_id=%s",
+                    jid,
+                )
+                emit_llm_trace_event(
+                    phase="llm_extract_done",
+                    model=MATCHING_MODEL,
+                    t0_monotonic=t0,
+                    job_id=job_id,
+                    outcome="cpu_fallback",
+                    parse_ok=False,
+                    retries=1,
+                    token_in=token_in,
+                    token_out=token_out,
+                )
+                return _cpu_fallback()
             logger.info("[extractor/llm] JSON parsed OK | job_id=%s", jid)
             data = parsed
+            emit_llm_trace_event(
+                phase="llm_extract_done",
+                model=MATCHING_MODEL,
+                t0_monotonic=t0,
+                job_id=job_id,
+                outcome="ok",
+                parse_ok=True,
+                retries=attempt - 1,
+                token_in=token_in,
+                token_out=token_out,
+            )
             break
+        except TimeoutError as e:
+            outcome = "timeout"
+            error_class = type(e).__name__
+            error_msg = str(e)[:500]
+            emit_llm_trace_event(
+                phase="llm_extract_done",
+                model=MATCHING_MODEL,
+                t0_monotonic=t0,
+                job_id=job_id,
+                outcome=outcome,
+                parse_ok=False,
+                retries=attempt - 1,
+                token_in=token_in,
+                token_out=token_out,
+                error_class=error_class,
+                error_msg=error_msg,
+            )
+            raise
         except Exception as e:
             logger.error(
                 "[extractor/llm] API call or parse FAILED | job_id=%s | "
@@ -486,6 +584,23 @@ async def llm_extract_jd(
                 type(e).__name__,
                 e,
                 exc_info=True,
+            )
+            outcome = "fail"
+            parse_ok = False
+            error_class = type(e).__name__
+            error_msg = str(e)[:500]
+            emit_llm_trace_event(
+                phase="llm_extract_done",
+                model=MATCHING_MODEL,
+                t0_monotonic=t0,
+                job_id=job_id,
+                outcome=outcome,
+                parse_ok=parse_ok,
+                retries=attempt - 1,
+                token_in=token_in,
+                token_out=token_out,
+                error_class=error_class,
+                error_msg=error_msg,
             )
             if attempt == 1:
                 logger.warning(
@@ -497,12 +612,35 @@ async def llm_extract_jd(
                 "[extractor/llm] Falling back to CPU | job_id=%s",
                 jid,
             )
+            emit_llm_trace_event(
+                phase="llm_extract_done",
+                model=MATCHING_MODEL,
+                t0_monotonic=t0,
+                job_id=job_id,
+                outcome="cpu_fallback",
+                parse_ok=False,
+                retries=1,
+                token_in=token_in,
+                token_out=token_out,
+                error_class=error_class,
+                error_msg=error_msg,
+            )
             return _cpu_fallback()
 
     if data is None:
         logger.warning(
             "[extractor/llm] LLM extraction failed, using CPU fallback | job_id=%s",
             jid,
+        )
+        _t = time.monotonic()
+        emit_llm_trace_event(
+            phase="llm_extract_done",
+            model=MATCHING_MODEL,
+            t0_monotonic=_t,
+            job_id=job_id,
+            outcome="cpu_fallback",
+            parse_ok=False,
+            retries=1,
         )
         return _cpu_fallback()
 
@@ -551,10 +689,6 @@ async def llm_extract_jd(
     if not isinstance(jd_inc, bool):
         jd_inc = len(req) == 0 and len(nice) == 0 and yoe is None
 
-    other_notes = data.get("other_notes")
-    if other_notes is not None:
-        other_notes = str(other_notes).strip() or None
-
     logger.info(
         "[extractor/llm] Extraction complete | job_id=%s | "
         "skills_req=%s | skills_nth=%s",
@@ -571,7 +705,6 @@ async def llm_extract_jd(
         "visa_req": visa,
         "required_skills": req,
         "nice_to_have_skills": nice,
-        "other_notes": other_notes,
         "jd_incomplete": jd_inc,
         "_step_b_matching_mode": "llm",
     }

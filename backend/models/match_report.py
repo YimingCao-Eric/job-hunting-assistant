@@ -26,6 +26,7 @@ class MatchReport(Base):
     match_level_counts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     gate_skip_counts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    debug_log: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

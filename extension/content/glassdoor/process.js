@@ -16,7 +16,33 @@ async function processGlassdoorCard(cardEl, config, counters) {
     return { skipped: true };
   }
 
+  const fetchStart = Date.now();
   const jdResult = await fetchGlassdoorJD(cardData.jobUrl, cardData.jl);
+
+  const gdResultType = !jdResult
+    ? "null"
+    : jdResult.rateLimited
+      ? "rate_limited"
+      : jdResult.phantom
+        ? "phantom"
+        : jdResult.jd
+          ? "jd_ok"
+          : "unknown";
+
+  await JhaDebug.emit(
+    "glassdoor_fetch",
+    {
+      jl: cardData.jl,
+      job_id: cardData.jobId,
+      took_ms: Date.now() - fetchStart,
+      result_type: gdResultType,
+      jd_len: jdResult?.jd?.length || 0,
+      http_status: jdResult?.http_status ?? null,
+      got_location: !!jdResult?.location,
+      got_easy_apply: jdResult?.easy_apply != null,
+    },
+    gdResultType === "jd_ok" ? "info" : "warn"
+  );
 
   if (jdResult && jdResult.phantom) {
     counters.stale_skipped++;
@@ -64,6 +90,7 @@ async function processGlassdoorCard(cardEl, config, counters) {
     scan_run_id:     config.runId || null,
   };
 
+  const ingStart = Date.now();
   const result = await new Promise((resolve) =>
     chrome.runtime.sendMessage({ type: "INGEST_JOB", job }, (r) => {
       if (r !== undefined) { resolve(r); return; }
@@ -71,6 +98,33 @@ async function processGlassdoorCard(cardEl, config, counters) {
         chrome.runtime.sendMessage({ type: "INGEST_JOB", job }, resolve);
       }, 2000);
     })
+  );
+
+  const resultType = !result
+    ? "no_response"
+    : result.error
+      ? "error"
+      : !result.id
+        ? "rejected"
+        : result.already_exists
+          ? "existing"
+          : result.content_duplicate
+            ? "content_duplicate"
+            : "new";
+
+  await JhaDebug.emit(
+    "ingest",
+    {
+      jl: cardData.jl,
+      job_id: cardData.jobId,
+      title: cardData.jobTitle,
+      company: cardData.company,
+      took_ms: Date.now() - ingStart,
+      result_type: resultType,
+      result_error: result?.error || null,
+      http_status: result?.http_status || null,
+    },
+    result && result.id ? "info" : "warn"
   );
 
   if (!result) {

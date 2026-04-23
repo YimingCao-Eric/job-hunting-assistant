@@ -16,18 +16,42 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
   }
   counters.scraped++;
 
+  const voyStart = Date.now();
   const [voyagerResult] = await Promise.all([
     fetchJDViaVoyager(cardData.job_id),
     new Promise((resolve) =>
       chrome.storage.local.set({ _swHeartbeat: Date.now() }, resolve)
     ),
   ]);
-  if (!voyagerResult) {
+
+  const jdText =
+    voyagerResult && voyagerResult.jd != null
+      ? String(voyagerResult.jd).trim()
+      : "";
+
+  await JhaDebug.emit(
+    "voyager",
+    {
+      job_id: cardData.job_id,
+      took_ms: Date.now() - voyStart,
+      http_status: voyagerResult?.status ?? null,
+      error: voyagerResult?.error ?? null,
+      got_jd: !!(voyagerResult && voyagerResult.jd && !voyagerResult.error),
+      jd_len: jdText.length,
+      got_company: !!(voyagerResult && voyagerResult.company),
+      got_listed_at: !!(voyagerResult && voyagerResult.listedAt),
+    },
+    voyagerResult && !voyagerResult.error ? "info" : "warn"
+  );
+
+  if (!voyagerResult || voyagerResult.error) {
     counters.jd_failed++;
     pushScanError(counters, {
       job_id: cardData.job_id,
       type: "jd_failed",
-      message: "Voyager returned no JD",
+      message: voyagerResult?.error
+        ? `Voyager: ${voyagerResult.error}`
+        : "Voyager returned no JD",
     });
     await recordSkip("linkedin", cardData, "jd_failed", config.runId);
     return { skipped: true };
@@ -46,8 +70,6 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
     cardData.post_datetime = new Date(voyagerResult.listedAt).toISOString();
   }
 
-  const jdText =
-    voyagerResult.jd != null ? String(voyagerResult.jd).trim() : "";
   if (!jdText) {
     counters.jd_failed++;
     pushScanError(counters, {
@@ -85,7 +107,33 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
     scan_run_id: config.runId,
   };
 
+  const ingStart = Date.now();
   const result = await ingestJob(jobPayload);
+  const resultType = !result
+    ? "no_response"
+    : result.error
+      ? "error"
+      : !result.id
+        ? "rejected"
+        : result.already_exists
+          ? "existing"
+          : result.content_duplicate
+            ? "content_duplicate"
+            : "new";
+
+  await JhaDebug.emit(
+    "ingest",
+    {
+      job_id: cardData.job_id,
+      title: cardData.job_title,
+      company: cardData.company,
+      took_ms: Date.now() - ingStart,
+      result_type: resultType,
+      result_error: result?.error || null,
+      http_status: result?.http_status ?? null,
+    },
+    result && result.id ? "info" : "warn"
+  );
 
   if (!result) {
     counters.jd_failed++;

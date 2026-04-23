@@ -24,6 +24,7 @@ class DedupReport(Base):
     gate_results: Mapped[dict] = mapped_column(JSONB, nullable=False)
     skip_reason_counts: Mapped[dict] = mapped_column(JSONB, nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    debug_log: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

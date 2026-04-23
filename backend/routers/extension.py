@@ -1,12 +1,14 @@
+import asyncio
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 from datetime import datetime, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from core.auth import get_current_user
 from core.config import settings
@@ -18,11 +20,17 @@ from models.extension_run_log import ExtensionRunLog
 from models.extension_state import ExtensionState
 from schemas.config import SearchConfigRead
 from schemas.extension import ExtensionStateRead, ExtensionStateUpdate, TriggerScanRequest
+from schemas.debug_log import DebugLogAppend
 from schemas.run_log import RunLogCreate, RunLogRead, RunLogUpdate
 
 router = APIRouter(prefix="/extension", tags=["extension"])
 
 logger = logging.getLogger(__name__)
+
+# Fire-and-forget background tasks for post-scan dedup.
+# Same rationale as in routers/matching.py: asyncio.create_task is not
+# tied to the request lifecycle, so client disconnects don't cancel it.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 async def _run_dedup_for_scan(log_id: UUID) -> None:
@@ -234,11 +242,44 @@ async def start_run_log(
     return _RunLogStartResponse(id=log.id)
 
 
+@router.post("/run-log/{log_id}/debug")
+async def append_debug_log(
+    log_id: UUID,
+    payload: DebugLogAppend,
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    """Append debug events to a run log. Ring-buffered at 10k events."""
+    result = await db.execute(
+        select(ExtensionRunLog).where(ExtensionRunLog.id == log_id)
+    )
+    run_log = result.scalar_one_or_none()
+    if not run_log:
+        raise HTTPException(status_code=404, detail="run log not found")
+
+    existing = (run_log.debug_log or {}).get("events", [])
+    if not isinstance(existing, list):
+        existing = []
+    new_events = [e.model_dump(mode="json") for e in payload.events]
+    combined = [*existing, *new_events]
+    if len(combined) > settings.debug_log_ring_size:
+        combined = combined[-settings.debug_log_ring_size :]
+
+    run_log.debug_log = {"events": combined}
+    flag_modified(run_log, "debug_log")
+
+    await db.commit()
+    return {
+        "ok": True,
+        "total_events": len(combined),
+        "accepted": len(payload.events),
+    }
+
+
 @router.put("/run-log/{log_id}", response_model=RunLogRead)
 async def update_run_log(
     log_id: UUID,
     body: RunLogUpdate,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
@@ -269,7 +310,9 @@ async def update_run_log(
                     and log.scan_all_position == log.scan_all_total
                 )
             if should_dedup:
-                background_tasks.add_task(_run_dedup_for_scan, log_id)
+                task = asyncio.create_task(_run_dedup_for_scan(log_id))
+                _BACKGROUND_TASKS.add(task)
+                task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     return log
 

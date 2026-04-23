@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, update
 
+import core.trace  # noqa: F401 — register stdlib → trace bridge handlers on startup
 from core.config import settings
 from core.database import AsyncSessionLocal, run_migrations
 from models.extension_run_log import ExtensionRunLog
@@ -21,6 +22,7 @@ from routers import skills as skills_router
 
 logging.getLogger("matching").setLevel(logging.DEBUG)
 logging.getLogger("routers.matching").setLevel(logging.DEBUG)
+logging.getLogger("routers.jobs").setLevel(logging.INFO)
 
 
 @asynccontextmanager

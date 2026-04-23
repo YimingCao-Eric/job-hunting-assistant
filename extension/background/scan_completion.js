@@ -13,6 +13,28 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   const { tabId, summary, runId } = changes.scanComplete.newValue;
   const { backendUrl, authToken } = await getSettings();
 
+  const { debugLog } = await chrome.storage.local.get("debugLog");
+  if (
+    debugLog &&
+    debugLog.runId === runId &&
+    Array.isArray(debugLog.events) &&
+    debugLog.events.length
+  ) {
+    try {
+      await fetch(`${backendUrl}/extension/run-log/${runId}/debug`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ events: debugLog.events }),
+      });
+    } catch (e) {
+      console.warn("[JHA] Final debug flush failed:", e.message);
+    }
+  }
+  await chrome.storage.local.remove("debugLog");
+
   try {
     await fetch(`${backendUrl}/extension/run-log/${runId}`, {
       method: "PUT",

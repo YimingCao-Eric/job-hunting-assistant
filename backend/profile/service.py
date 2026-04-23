@@ -10,6 +10,8 @@ from pathlib import Path
 
 from dateutil.relativedelta import relativedelta
 
+from matching.normaliser import normalise
+
 logger = logging.getLogger(__name__)
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -92,21 +94,39 @@ def compute_yoe(work_experience: list) -> float:
     return round(years, 1)
 
 
-def _dedupe_extra_skills(skills: list | None) -> list[str]:
-    """Normalize manual extra_skills: strip, drop empty, dedupe case-insensitively."""
-    if not skills:
+def _normalise_extra_skills_input(raw: object) -> list[str]:
+    """CSV-split, normalise via skill aliases, dedupe preserving order (list or str)."""
+    if raw is None:
         return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for s in skills:
-        t = str(s).strip()
-        if not t:
+    if isinstance(raw, str):
+        items: list = [raw]
+    elif isinstance(raw, list):
+        items = list(raw)
+    else:
+        return []
+    tokens: list[str] = []
+    for item in items:
+        s = str(item).strip()
+        if not s:
             continue
-        k = t.lower()
+        if "," in s:
+            for part in s.split(","):
+                t = part.strip()
+                if t:
+                    tokens.append(t)
+        else:
+            tokens.append(s)
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        c = normalise(t)
+        if not c:
+            continue
+        k = c.lower()
         if k in seen:
             continue
         seen.add(k)
-        out.append(t)
+        out.append(c)
     return out
 
 
@@ -143,6 +163,10 @@ def _parse_llm_skill_json(text: str) -> list[str] | None:
 
 
 async def _llm_extract_skills(description: str) -> list[str] | None:
+    import time
+
+    from core.trace import emit_llm_trace_event
+
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         logger.warning("OPENAI_API_KEY not set; skipping LLM skill extraction")
@@ -163,14 +187,26 @@ async def _llm_extract_skills(description: str) -> list[str] | None:
         "methodologies. Exclude soft skills and job titles.\n\n"
         f"Text: {description}"
     )
+    t0 = time.monotonic()
+    outcome = "ok"
+    parse_ok = True
+    retries = 0
+    token_in: int | None = None
+    token_out: int | None = None
+    error_class: str | None = None
+    error_msg: str | None = None
+    _model = "gpt-4o-mini"
     try:
         async with AsyncOpenAI(api_key=api_key) as client:
             message = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=_model,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
             )
+        if hasattr(message, "usage") and message.usage:
+            token_in = getattr(message.usage, "prompt_tokens", None)
+            token_out = getattr(message.usage, "completion_tokens", None)
         raw = (message.choices[0].message.content or "").strip()
         try:
             data = json.loads(raw)
@@ -181,13 +217,33 @@ async def _llm_extract_skills(description: str) -> list[str] | None:
                     if out:
                         return out
         except json.JSONDecodeError:
-            pass
+            parse_ok = False
         skills = _parse_llm_skill_json(raw)
         if skills is not None:
             return skills
         logger.warning("LLM skill response was not usable JSON; falling back to CPU")
+        outcome = "cpu_fallback"
+        parse_ok = False
     except Exception as exc:
+        outcome = "fail"
+        parse_ok = False
+        error_class = type(exc).__name__
+        error_msg = str(exc)[:500]
         logger.warning("LLM skill extraction failed: %s", exc)
+    finally:
+        emit_llm_trace_event(
+            phase="llm_extract_profile_skills",
+            model=_model,
+            t0_monotonic=t0,
+            job_id=None,
+            outcome=outcome,
+            parse_ok=parse_ok,
+            retries=retries,
+            token_in=token_in,
+            token_out=token_out,
+            error_class=error_class,
+            error_msg=error_msg,
+        )
     return None
 
 
@@ -246,7 +302,7 @@ async def extract_profile(profile_data: dict, llm: bool) -> dict:
     union_list = sorted(union)
 
     extra_raw = out.get("extra_skills")
-    extra_clean = _dedupe_extra_skills(extra_raw if isinstance(extra_raw, list) else [])
+    extra_clean = _normalise_extra_skills_input(extra_raw)
     out["extra_skills"] = extra_clean
 
     merged_skills = list(union_list)

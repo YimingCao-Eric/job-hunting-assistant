@@ -6,12 +6,14 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from core.auth import get_current_user
+from core.config import settings
 from core.config_file import read_config_file
 from core.database import get_db
 from core.profile_file import get_empty_profile, read_profile
@@ -29,6 +31,7 @@ from models.scraped_job import ScrapedJob
 from profile.service import load_skill_aliases
 from routers.dedup import DEDUP_SERVICE_SKIP_REASONS
 from schemas.config import SearchConfigRead
+from schemas.debug_log import DebugLogAppend
 from schemas.match_report import MatchReportRead
 from schemas.scraped_job import ScrapedJobRead
 
@@ -61,6 +64,11 @@ _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message
 logging.getLogger("matching").addHandler(_log_handler)
 logging.getLogger("routers.matching").addHandler(_log_handler)
 
+# Tracks live matching pipeline tasks so (a) they're not GC'd mid-run and
+# (b) /match/status can report what's running without reconstructing state.
+# Key: asyncio.Task, Value: mode string ("cpu_only" | "llm_extraction_gates" | "cpu_score" | "llm_score")
+_BACKGROUND_TASKS: dict[asyncio.Task, str] = {}
+
 router = APIRouter(tags=["matching"])
 
 
@@ -77,6 +85,13 @@ class MatchRequest(BaseModel):
 
 class MatchRunStarted(BaseModel):
     status: str = "started"
+    mode: str | None = None
+
+
+class MatchStatus(BaseModel):
+    """Reports whether a matching pipeline task is currently running."""
+
+    running: bool
     mode: str | None = None
 
 
@@ -205,7 +220,6 @@ async def _run_step_b_extraction_all_passed(
                 job.visa_req = data.get("visa_req")
                 job.required_skills = data.get("required_skills") or []
                 job.nice_to_have_skills = data.get("nice_to_have_skills") or []
-                job.other_notes = data.get("other_notes")
                 job.jd_incomplete = bool(data.get("jd_incomplete", False))
                 eff_mode = data.get("_step_b_matching_mode")
                 job.matching_mode = (
@@ -350,7 +364,6 @@ async def match_jobs_get_not_implemented(_user: dict = Depends(get_current_user)
 
 @router.post("/jobs/match", response_model=MatchRunStarted)
 async def match_jobs_run(
-    background_tasks: BackgroundTasks,
     body: MatchRequest = MatchRequest(),
     _user: dict = Depends(get_current_user),
 ):
@@ -385,7 +398,10 @@ async def match_jobs_run(
                 detail="OPENAI_API_KEY must be set to run LLM scoring",
             )
 
-    background_tasks.add_task(_matching_background, body.mode)
+    mode_label = body.mode or "default"
+    task = asyncio.create_task(_matching_background(body.mode))
+    _BACKGROUND_TASKS[task] = mode_label
+    task.add_done_callback(lambda t: _BACKGROUND_TASKS.pop(t, None))
     return MatchRunStarted(status="started", mode=body.mode)
 
 
@@ -687,11 +703,14 @@ async def undo_button3(
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
+    """Clear Button 3 CPU scores and any downstream Button 4 fields; does not touch matching_mode."""
     r = await db.execute(
         update(ScrapedJob)
         .where(
-            ScrapedJob.match_level.isnot(None),
-            or_(ScrapedJob.matching_mode == "cpu", ScrapedJob.matching_mode.is_(None)),
+            or_(
+                ScrapedJob.fit_score.isnot(None),
+                ScrapedJob.match_level.isnot(None),
+            ),
         )
         .values(
             fit_score=None,
@@ -705,7 +724,7 @@ async def undo_button3(
         .execution_options(synchronize_session=False)
     )
     await db.commit()
-    logger.info("[match/undo-button3] Cleared CPU scores | rows=%s", r.rowcount)
+    logger.info("[match/undo-button3] Cleared score fields | rows=%s", r.rowcount)
     return {"reset_count": r.rowcount or 0}
 
 
@@ -715,8 +734,8 @@ async def undo_button4(
     _user: dict = Depends(get_current_user),
 ):
     """
-    Clear Step D LLM scoring. Targets rows scored by Step D (confidence set);
-    restores matching_mode to cpu for re-run / CPU-only state.
+    Clear Step D LLM scoring fields. Does not change matching_mode — that reflects
+    JD extraction (Button 1/2), not scoring; only undo-button2 reverts extraction mode.
     """
     r = await db.execute(
         update(ScrapedJob)
@@ -730,7 +749,6 @@ async def undo_button4(
             blocking_gap=None,
             gap_adjacency=None,
             confidence=None,
-            matching_mode="cpu",
         )
         .execution_options(synchronize_session=False)
     )
@@ -748,10 +766,11 @@ async def dismiss_job(
     job = await db.get(ScrapedJob, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.match_level is None:
+    eligible = job.match_level is not None or job.match_skip_reason is not None
+    if not eligible:
         raise HTTPException(
             status_code=422,
-            detail="Job must be CPU-scored (match_level set) before dismiss",
+            detail="Job must be scored or gate-failed to dismiss",
         )
     job.dismissed = True
     await db.commit()
@@ -769,6 +788,10 @@ async def undismiss_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     job.dismissed = False
+    if job.match_skip_reason is not None:
+        await db.commit()
+        await db.refresh(job)
+        return job
     job.skip_reason = None
     job.match_skip_reason = None
     job.required_skills = None
@@ -855,6 +878,19 @@ async def list_match_reports(
     return list(result.scalars().all())
 
 
+@router.get("/match/status", response_model=MatchStatus)
+async def match_status(_user: dict = Depends(get_current_user)):
+    """Return { running: bool, mode: str|null } for the most recent live task.
+
+    If multiple are live (rare — UI disables buttons during a run), returns the
+    first encountered. If none are live, returns { running: false, mode: null }.
+    """
+    for task, mode in _BACKGROUND_TASKS.items():
+        if not task.done():
+            return MatchStatus(running=True, mode=mode)
+    return MatchStatus(running=False, mode=None)
+
+
 @router.get("/match/logs")
 async def get_match_logs(_user: dict = Depends(get_current_user)):
     return {"lines": MatchingLogHandler.get_lines()}
@@ -870,3 +906,26 @@ async def get_match_report(
     if row is None:
         raise HTTPException(status_code=404, detail="Match report not found")
     return row
+
+
+@router.post("/match/reports/{report_id}/debug")
+async def append_match_debug_log(
+    report_id: int,
+    payload: DebugLogAppend,
+    db: AsyncSession = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    row = await db.get(MatchReport, report_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="match report not found")
+    existing = (row.debug_log or {}).get("events", [])
+    if not isinstance(existing, list):
+        existing = []
+    new_events = [e.model_dump(mode="json") for e in payload.events]
+    combined = [*existing, *new_events]
+    if len(combined) > settings.debug_log_ring_size:
+        combined = combined[-settings.debug_log_ring_size :]
+    row.debug_log = {"events": combined}
+    flag_modified(row, "debug_log")
+    await db.commit()
+    return {"ok": True, "total_events": len(combined), "accepted": len(payload.events)}

@@ -272,7 +272,12 @@ async function fetchGlassdoorJD(jobUrl, jl) {
                 : String(desc).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
               if (hasJdText(clean)) {
                 const loc = locationFromJobPosting(d) || locationFromLd;
-                return withMeta({ jd: clean, easy_apply: easyApplyFromLd, location: loc });
+                return withMeta({
+                  jd: clean,
+                  easy_apply: easyApplyFromLd,
+                  location: loc,
+                  http_status: res.status,
+                });
               }
             }
           } catch {
@@ -295,11 +300,15 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       }
 
       if (hasJdText(jd)) {
-        return withMeta({ jd: String(jd).trim(), easy_apply: easyApplyFromLd });
+        return withMeta({
+          jd: String(jd).trim(),
+          easy_apply: easyApplyFromLd,
+          http_status: res.status,
+        });
       }
 
       console.warn(`[JHA-Glassdoor] fetch_jd: no JD found for jl=${jl} url=${safeUrl}`);
-      return { phantom: true, easy_apply: false };
+      return { phantom: true, easy_apply: false, http_status: res.status };
     } catch (err) {
       clearTimeout(timeout);
       if (attempt < 2) {

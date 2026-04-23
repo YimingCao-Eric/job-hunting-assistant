@@ -1,6 +1,6 @@
 # Job Hunting Assistant — Frontend
 
-Single-page app for **search configuration**, **profile / resume**, **job list**, **run logs** (scan runs, dedup reports, pipeline match reports, and **issue reports**), **skill candidate review**, **matching pipeline** (dedup + extraction + gates + CPU score), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth.
+Single-page app for **search configuration**, **profile / resume**, **job list**, **run logs** (scan runs, dedup reports, pipeline match reports, and **issue reports**), **skill candidate review**, **matching pipeline** (dedup + extraction + gates + CPU score + optional **LLM re-score**), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth.
 
 For Docker-based full-stack setup, see the [repository root README](../README.md).
 
@@ -29,12 +29,12 @@ frontend/
 │   │   ├── ConfigPage.jsx
 │   │   ├── ProfilePage.jsx     Resume upload, parsed profile, skills
 │   │   ├── JobsPage.jsx        Scans, Scan All, job grid, filters
-│   │   ├── LogsPage.jsx        Search runs; Dedup reports; Matching run reports; **Reports** (issue reports from Matching)
+│   │   ├── LogsPage.jsx        Search runs (expandable **Debug trace**); Dedup / Matching run reports (same **Debug trace** when **`debug_log`** present); **Reports** (issue reports from Matching)
 │   │   ├── SkillsPage.jsx      Skill alias candidates (approve / merge / reject)
-│   │   ├── MatchingPage.jsx    Pipeline buttons (CPU / LLM / score), filters, job grid, **report flag** per card
+│   │   ├── MatchingPage.jsx    Pipeline buttons (CPU / LLM extract / CPU score / LLM score), filters, job grid, **report flag** per card
 │   │   └── DedupPage.jsx       Dedup mode, run/reset, filter pills, job grid
 │   ├── components/
-│   │   ├── PageTitle.jsx, Spinner.jsx, JobCard.jsx, JobModal.jsx
+│   │   ├── PageTitle.jsx, Spinner.jsx, JobCard.jsx, JobModal.jsx, DebugTracePanel.jsx
 │   │   ├── DedupSkipBadge.jsx  Dedup skip reason + lazy fetch for dedup_original_job
 │   │   ├── MatchBadge.jsx, MatchSkipBadge.jsx  Match level / gate skip UI
 │   └── utils/
@@ -52,10 +52,10 @@ frontend/
 | `/` | Config — search config, dedup mode, LLM toggle, site filters, URL previews |
 | `/profile` | Profile — resume upload, parsed fields, skills for matching |
 | `/jobs` | Jobs — list, filters, scans (LinkedIn / Indeed / Glassdoor / **Scan All**), progress |
-| `/logs` | Logs — **Search** (run logs), **Dedup**, **Matching** (pipeline run metrics), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
+| `/logs` | Logs — **Search** (run logs; **Debug trace** from `debug_log.events`), **Dedup** / **Matching** (pipeline metrics + **Debug trace** on each report card when present), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
 | `/skills` | Skills — review skill alias candidates from JD extraction |
-| `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score; removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**) |
-| `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters |
+| `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score, optional **LLM re-score** (`llm_score`); removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**). On load, **`GET /match/status`** rehydrates the running spinner if the backend still has a pipeline task; long runs poll **`GET /match/reports`** with extended timeouts (up to **30 minutes** for LLM-heavy buttons). |
+| `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters (route only; no top-nav link — use URL or bookmark) |
 
 Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/matching`** (redirects).
 
@@ -119,16 +119,17 @@ The `api` object exports methods (all requests use the shared `Authorization` he
 | `stopScan` | `POST /extension/trigger-stop` |
 | `getRunLogs` | `GET /extension/run-log` |
 | `getExtensionState` | `GET /extension/state` |
-| `runMatching` | `POST /jobs/match` — body `{ mode?: 'cpu_only' \| 'llm_extraction_gates' \| 'cpu_score' }`; returns **`{ status: 'started', mode }`** immediately |
+| `runMatching` | `POST /jobs/match` — body `{ mode?: 'cpu_only' \| 'llm_extraction_gates' \| 'cpu_score' \| 'llm_score' }`; returns **`{ status: 'started', mode }`** immediately |
+| `getMatchStatus` | `GET /match/status` — **`{ running, mode }`** for rehydrating UI after navigation |
 | `getMatchReports` / `getMatchReport` | `GET /match/reports`, `/match/reports/{id}` |
 | `getMatchExtractedCount` | `GET /jobs/match/extracted-count` |
 | `getMatchLogs` | `GET /match/logs` |
 | `runGates`, `scoreJobs`, `resetGates`, `resetScore`, `resetExtraction` | Other `/jobs/match/*` helpers |
-| `undoButton1` … `undoButton3`, `dismissJob`, `undismissJob` | Pipeline undo + dismiss endpoints |
+| `undoButton1` … `undoButton4`, `dismissJob`, `undismissJob` | Pipeline undo + dismiss endpoints |
 | `getProfile`, `saveProfile`, `uploadResume`, `parseResume`, `getProfileExtracted` | `/profile` |
 | `getSkillCandidates`, `getSkillCandidateStats`, `approveSkillCandidate`, `mergeSkillCandidate`, `rejectSkillCandidate`, `refreshSkillAliases` | `/skills/candidates/*` |
 
-**Matching page polling:** After **`runMatching`**, the API finishes work in the background. The UI polls **`getMatchReports`** until the report count increases (or times out after two minutes) so the request does not block on large batches.
+**Matching page polling:** After **`runMatching`**, the API finishes work in a detached background task. The UI polls **`getMatchReports`** until the report count increases. Default wait is **15 minutes**; Buttons **2** and **4** use **30 minutes**. Timeout errors note that the backend task may still be running. **`getMatchStatus`** on mount restores the “running” state if you navigated away mid-run.
 
 ## Scan All (Jobs page)
 

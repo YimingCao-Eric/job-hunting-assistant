@@ -19,4 +19,5 @@ class MatchReportRead(BaseModel):
     match_level_counts: dict | None = None
     gate_skip_counts: dict | None = None
     duration_ms: int | None = None
+    debug_log: dict | None = None
     created_at: datetime

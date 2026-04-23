@@ -51,6 +51,44 @@
   cursor: not-allowed;
 }
 
+.runBtnSpinner {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
+
+.runBtnFlash {
+  background: #2e7d32 !important;
+  border-color: #1b5e20 !important;
+  transition: background 0.2s ease;
+}
+
+.spinnerGlyph {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: matchSpin 0.7s linear infinite;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.runElapsed {
+  font-weight: 600;
+  font-size: 0.9em;
+  opacity: 0.95;
+}
+
+@keyframes matchSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .dedupActions {
   display: flex;
   flex-wrap: wrap;
@@ -430,11 +468,12 @@
 
 .runningStatus {
   margin: 8px 0 16px;
-  font-size: 12px;
-  color: #666;
+  font-size: 13px;
+  color: #444;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
 }
 
 .runningHint {

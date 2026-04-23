@@ -1,5 +1,7 @@
 import hashlib
+import logging
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
+from time import monotonic
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,6 +22,9 @@ from schemas.scraped_job import (
 )
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 _BLACKLIST_SKIP_REASONS = frozenset(
     {
@@ -59,73 +64,163 @@ async def ingest_job(
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
+    t_start = monotonic()
     body.job_title = body.job_title or "Unknown"
+    log_context = {
+        "website": body.website,
+        "job_url": (body.job_url or "")[:200],
+        "company": (body.company or "")[:100],
+        "jd_len": len(body.job_description or ""),
+        "scan_run_id": str(body.scan_run_id) if body.scan_run_id else None,
+    }
+    logger.info("ingest_start %s", log_context)
 
-    if body.skip_reason:
-        data = body.model_dump(exclude_unset=False)
-        data["job_url"] = None
-        new_job = ScrapedJob(**data)
+    try:
+        if body.skip_reason:
+            t_stage = monotonic()
+            data = body.model_dump(exclude_unset=False)
+            data["job_url"] = None
+            new_job = ScrapedJob(**data)
+            new_job.ingest_source = "extension"
+            db.add(new_job)
+            await db.flush()
+            logger.debug(
+                "ingest_db_done %s",
+                {**log_context, "took_ms": int((monotonic() - t_stage) * 1000)},
+            )
+            logger.info(
+                "ingest_ok %s",
+                {
+                    **log_context,
+                    "took_ms": int((monotonic() - t_start) * 1000),
+                    "path": "skip_reason",
+                },
+            )
+            return ScrapedJobIngestResponse(
+                id=new_job.id,
+                already_exists=False,
+                content_duplicate=False,
+                skip_reason=body.skip_reason,
+            )
+
+        t_dedup = monotonic()
+        if body.job_url:
+            existing = await db.execute(
+                select(ScrapedJob).where(ScrapedJob.job_url == body.job_url)
+            )
+            row = existing.scalars().first()
+            if row is not None:
+                logger.debug(
+                    "ingest_dedup_done %s",
+                    {
+                        **log_context,
+                        "took_ms": int((monotonic() - t_dedup) * 1000),
+                        "result": "url_duplicate",
+                    },
+                )
+                logger.debug(
+                    "ingest_embedding_done %s",
+                    {**log_context, "took_ms": 0, "note": "n/a"},
+                )
+                logger.debug(
+                    "ingest_db_done %s",
+                    {**log_context, "took_ms": 0, "note": "no_write"},
+                )
+                logger.info(
+                    "ingest_ok %s",
+                    {
+                        **log_context,
+                        "took_ms": int((monotonic() - t_start) * 1000),
+                        "path": "url_duplicate_hit",
+                    },
+                )
+                return ScrapedJobIngestResponse(
+                    id=row.id,
+                    already_exists=True,
+                    content_duplicate=False,
+                    skip_reason="url_duplicate",
+                )
+
+        jd = body.job_description
+        if jd is not None and not str(jd).strip():
+            jd = None
+            body = body.model_copy(update={"job_description": None})
+
+        desc_hash = _hash_description(jd)
+
+        hash_match = await db.execute(
+            select(ScrapedJob).where(ScrapedJob.raw_description_hash == desc_hash)
+        )
+        content_dup_row = hash_match.scalars().first()
+        content_duplicate = content_dup_row is not None
+
+        logger.debug(
+            "ingest_dedup_done %s",
+            {
+                **log_context,
+                "took_ms": int((monotonic() - t_dedup) * 1000),
+                "content_dup": content_duplicate,
+            },
+        )
+
+        t_emb = monotonic()
+        logger.debug(
+            "ingest_embedding_done %s",
+            {
+                **log_context,
+                "took_ms": int((monotonic() - t_emb) * 1000),
+                "note": "n/a",
+            },
+        )
+
+        payload = body.model_dump(exclude_unset=False)
+        payload.pop("original_job_id", None)
+        if content_duplicate and content_dup_row is not None:
+            payload["original_job_id"] = content_dup_row.id
+        else:
+            payload["original_job_id"] = None
+
+        new_job = ScrapedJob(
+            **payload,
+            raw_description_hash=desc_hash,
+        )
         new_job.ingest_source = "extension"
+
+        t_db = monotonic()
         db.add(new_job)
         await db.flush()
+        logger.debug(
+            "ingest_db_done %s",
+            {**log_context, "took_ms": int((monotonic() - t_db) * 1000)},
+        )
+
+        resp_skip = new_job.skip_reason or (
+            "content_duplicate" if content_duplicate else None
+        )
+        logger.info(
+            "ingest_ok %s",
+            {
+                **log_context,
+                "took_ms": int((monotonic() - t_start) * 1000),
+                "path": "insert",
+            },
+        )
         return ScrapedJobIngestResponse(
             id=new_job.id,
             already_exists=False,
-            content_duplicate=False,
-            skip_reason=body.skip_reason,
+            content_duplicate=content_duplicate,
+            skip_reason=resp_skip,
         )
-
-    if body.job_url:
-        existing = await db.execute(
-            select(ScrapedJob).where(ScrapedJob.job_url == body.job_url)
+    except Exception as e:
+        total_ms = int((monotonic() - t_start) * 1000)
+        logger.exception(
+            "ingest_error took_ms=%s error_type=%s error_message=%s ctx=%s",
+            total_ms,
+            type(e).__name__,
+            str(e)[:500],
+            log_context,
         )
-        row = existing.scalar_one_or_none()
-        if row is not None:
-            return ScrapedJobIngestResponse(
-                id=row.id,
-                already_exists=True,
-                content_duplicate=False,
-                skip_reason="url_duplicate",
-            )
-
-    jd = body.job_description
-    if jd is not None and not str(jd).strip():
-        jd = None
-        body = body.model_copy(update={"job_description": None})
-
-    desc_hash = _hash_description(jd)
-
-    hash_match = await db.execute(
-        select(ScrapedJob).where(ScrapedJob.raw_description_hash == desc_hash)
-    )
-    content_dup_row = hash_match.scalar_one_or_none()
-    content_duplicate = content_dup_row is not None
-
-    payload = body.model_dump(exclude_unset=False)
-    payload.pop("original_job_id", None)
-    if content_duplicate and content_dup_row is not None:
-        payload["original_job_id"] = content_dup_row.id
-    else:
-        payload["original_job_id"] = None
-
-    new_job = ScrapedJob(
-        **payload,
-        raw_description_hash=desc_hash,
-    )
-    new_job.ingest_source = "extension"
-
-    db.add(new_job)
-    await db.flush()
-
-    resp_skip = new_job.skip_reason or (
-        "content_duplicate" if content_duplicate else None
-    )
-    return ScrapedJobIngestResponse(
-        id=new_job.id,
-        already_exists=False,
-        content_duplicate=content_duplicate,
-        skip_reason=resp_skip,
-    )
+        raise
 
 
 @router.get("", response_model=JobsListResponse)
@@ -150,7 +245,11 @@ async def list_jobs(
     match_status: str | None = None,
     llm_step_d: bool | None = Query(
         None,
-        description="If true, only jobs scored by Step D (matching_mode=llm and confidence set).",
+        description="If true, only jobs scored by Step D (matching_mode=llm and LLM confidence set).",
+    ),
+    jd_incomplete: bool | None = Query(
+        None,
+        description="If true/false, filter by jd_incomplete flag.",
     ),
     order_by: str | None = Query(
         None,
@@ -306,6 +405,9 @@ async def list_jobs(
     if llm_step_d is True:
         conditions.append(ScrapedJob.matching_mode == "llm")
         conditions.append(ScrapedJob.confidence.isnot(None))
+
+    if jd_incomplete is not None:
+        conditions.append(ScrapedJob.jd_incomplete == jd_incomplete)
 
     pending_report_exists = exists().where(
         JobReport.job_id == ScrapedJob.id,

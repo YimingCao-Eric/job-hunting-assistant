@@ -3,6 +3,7 @@
 importScripts(
   "keepalive.js",
   "settings.js",
+  "debug_flush.js",
   "config_fetch.js",
   "search_urls.js",
   "scan_manual.js",

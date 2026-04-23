@@ -7,8 +7,11 @@ import json
 import logging
 import os
 import re
+import time
 from collections import defaultdict
 from typing import Any
+
+from core.trace import emit_llm_trace_event
 
 logger = logging.getLogger(__name__)
 
@@ -369,30 +372,67 @@ Resume:
 {markdown}
 """
 
+    t0 = time.monotonic()
+    outcome = "ok"
+    parse_ok = True
+    token_in: int | None = None
+    token_out: int | None = None
+    error_class: str | None = None
+    error_msg: str | None = None
     last_err: Exception | None = None
-    async with AsyncOpenAI(api_key=api_key) as client:
-        for attempt in range(2):
-            response = await client.chat.completions.create(
-                model=RESUME_PARSE_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=2000,
-                temperature=0,
-            )
-            raw_json = response.choices[0].message.content or ""
-            try:
-                parsed = json.loads(_strip_json_fences(raw_json))
-                if not isinstance(parsed, dict):
-                    raise ValueError("expected JSON object")
-                return normalize_parsed_resume(parsed)
-            except (json.JSONDecodeError, ValueError) as e:
-                last_err = e
-                logger.warning("[resume/llm] JSON parse attempt %s failed: %s", attempt + 1, e)
-
-    raise RuntimeError("LLM resume parse failed after 2 attempts") from last_err
+    try:
+        async with AsyncOpenAI(api_key=api_key) as client:
+            for attempt in range(2):
+                response = await client.chat.completions.create(
+                    model=RESUME_PARSE_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_tokens=2000,
+                    temperature=0,
+                )
+                if hasattr(response, "usage") and response.usage:
+                    token_in = getattr(response.usage, "prompt_tokens", None)
+                    token_out = getattr(response.usage, "completion_tokens", None)
+                raw_json = response.choices[0].message.content or ""
+                try:
+                    parsed = json.loads(_strip_json_fences(raw_json))
+                    if not isinstance(parsed, dict):
+                        raise ValueError("expected JSON object")
+                    parse_ok = True
+                    return normalize_parsed_resume(parsed)
+                except (json.JSONDecodeError, ValueError) as e:
+                    last_err = e
+                    parse_ok = False
+                    logger.warning("[resume/llm] JSON parse attempt %s failed: %s", attempt + 1, e)
+        outcome = "fail"
+        err = last_err or RuntimeError("parse failed")
+        error_class = type(err).__name__
+        error_msg = str(err)[:500]
+        raise RuntimeError("LLM resume parse failed after 2 attempts") from last_err
+    except Exception as e:
+        outcome = "fail"
+        parse_ok = False
+        error_class = type(e).__name__
+        error_msg = str(e)[:500]
+        raise
+    finally:
+        emit_llm_trace_event(
+            phase="llm_parse_resume",
+            model=RESUME_PARSE_MODEL,
+            t0_monotonic=t0,
+            job_id=None,
+            outcome=outcome,
+            parse_ok=parse_ok,
+            retries=0,
+            token_in=token_in,
+            token_out=token_out,
+            error_class=error_class,
+            error_msg=error_msg,
+            extra={"prompt_body": {"omitted": True, "length": len(markdown)}},
+        )
 
 
 def normalize_parsed_resume(raw: dict[str, Any]) -> dict[str, Any]:

@@ -22,19 +22,20 @@ async function handleIngest(job) {
   });
 
   const text = await res.text();
+  let parsed = null;
+  let parseError = null;
   try {
-    return JSON.parse(text);
+    parsed = JSON.parse(text);
   } catch (e) {
-    console.error(
-      "[JHA] handleIngest: non-JSON response:",
-      res.status,
-      text.slice(0, 200)
-    );
-    const errMsg = `Backend ${res.status}: ${text.slice(0, 100)}`;
-    (async () => {
-      await chrome.storage.local.set({ lastSessionError: errMsg });
-      const { backendUrl, authToken } = await getSettings();
+    parseError = e;
+  }
+
+  if (!res.ok) {
+    const errMsg = `Backend ${res.status}: ${(text || parseError?.message || "").slice(0, 200)}`;
+    console.warn("[JHA] Ingest HTTP error:", errMsg);
+    if (res.status >= 500) {
       try {
+        await chrome.storage.local.set({ lastSessionError: errMsg });
         await fetch(`${backendUrl}/extension/session-error`, {
           method: "POST",
           headers: {
@@ -46,7 +47,28 @@ async function handleIngest(job) {
       } catch {
         /* ignore */
       }
-    })();
-    return null;
+    }
+    return { id: null, error: errMsg, http_status: res.status };
   }
+
+  if (parseError) {
+    const errMsg = `Non-JSON response (${res.status}): ${text.slice(0, 100)}`;
+    console.error("[JHA] handleIngest:", errMsg);
+    try {
+      await chrome.storage.local.set({ lastSessionError: errMsg });
+      await fetch(`${backendUrl}/extension/session-error`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ error: errMsg }),
+      });
+    } catch {
+      /* ignore */
+    }
+    return { id: null, error: errMsg, http_status: res.status };
+  }
+
+  return { ...parsed, http_status: res.status };
 }

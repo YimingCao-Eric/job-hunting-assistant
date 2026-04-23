@@ -6,7 +6,7 @@ This extension automates scanning job search result pages on **LinkedIn** (`link
 
 **Starting a scan (two paths):** (1) **Web app — Jobs page** — `POST /extension/trigger-scan` with body `{"website":"linkedin"|"indeed"|"glassdoor"}` (and optional **`scan_all`**, **`scan_all_position`**, **`scan_all_total`** for **Scan All**). The backend stores the request on **`extension_state`**; **`background/poll.js`** polls **`GET /extension/pending-scan` every 3s** and calls `handleManualScan({ websiteOverride, scan_all, scan_all_position, scan_all_total })` when `pending` is true. **Scan All** sends metadata so each run log row records position/total; the **backend** runs **sync dedup** only after the **last** site completes (not the extension). (2) **Extension popup — Scan Now** — sends **`MANUAL_SCAN`** with no override; `handleManualScan()` runs with `effectiveWebsite` from config only (no Scan All metadata).
 
-The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. **Dedup** runs on the server (`POST /jobs/dedup` or automatic after run completion when `dedup_mode` is sync). **Matching** (CPU/LLM job-description extraction, gates, scoring) is **web-app only**: open the **Matching** page in the JHA UI (`/matching`), which calls `POST /jobs/match` (queued on the server) and polls match reports — the extension does not invoke those endpoints. **Issue reports** (flag on job cards → `POST /jobs/{id}/report`) and the **Logs → Reports** tab are also **web-app only**. The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, nested **`glassdoor`**, **`dedup_mode`**, **`llm`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history, dedup reports, pipeline match reports, and issue reports live in the **web app** (**Logs**); the extension does not render those UIs.
+The service worker coordinates scans, forwards ingest requests from content scripts, updates run logs and extension state on the backend, and closes the scan window (popup) when a run finishes. **Scan debug trace:** content scripts use **`JhaDebug`** (`content/shared/debug_logger.js`) to record structured events (pagination, cards, session checks, etc.) in **`chrome.storage.local.debugLog`**; the background worker flushes batches to **`POST /extension/run-log/{runId}/debug`** and sends a final flush when the run completes (**`scan_completion.js`**). The web app **Logs** page can show and export this stream per run. **Dedup** runs on the server (`POST /jobs/dedup` or automatic after run completion when `dedup_mode` is sync). Post-scan dedup is scheduled with **`asyncio.create_task`** so closing the extension tab does not cancel it. **Matching** (CPU/LLM job-description extraction, gates, CPU scoring, optional LLM re-score) is **web-app only**: open the **Matching** page in the JHA UI (`/matching`), which calls `POST /jobs/match` with modes such as `cpu_only`, `llm_extraction_gates`, `cpu_score`, or `llm_score` (queued on the server as a detached task) and polls match reports — the extension does not invoke those endpoints. **Issue reports** (flag on job cards → `POST /jobs/{id}/report`) and the **Logs → Reports** tab are also **web-app only**. The **popup** (`popup/popup.html`) lets the user set the backend URL, trigger **Scan Now** (`MANUAL_SCAN`), stop a scan, and see live progress read from storage. Full config (including `website`, `indeed_*`, nested **`glassdoor`**, **`dedup_mode`**, **`llm`**) is edited on the **web Config page** or via `PUT /config` — see repo root `README.md`. Run history, dedup reports, pipeline match reports, and issue reports live in the **web app** (**Logs**); the extension does not render those UIs.
 
 ## Architecture
 
@@ -21,6 +21,7 @@ extension/
 │   ├── search_urls.js               LinkedIn, Indeed & Glassdoor job search URL builders
 │   ├── scan_manual.js               handleManualScan — reset state, run log, 90min safety timer, open scan in popup window
 │   ├── ingest.js                    POST /jobs/ingest (job payload from content scripts)
+│   ├── debug_flush.js               DEBUG_LOG_FLUSH → POST /extension/run-log/{id}/debug
 │   ├── runtime_messages.js          chrome.runtime.onMessage router (ingest, tab nav, etc.)
 │   ├── scan_completion.js           On scanComplete in storage → PUT run-log, close tab
 │   ├── tabs_safety.js               Clear scan state if user closes tab mid-scan
@@ -30,6 +31,7 @@ extension/
 │   ├── content_style.css            Shared styles (e.g. scan overlay classes where used)
 │   ├── shared/
 │   │   ├── utils.js                 sleep()
+│   │   ├── debug_logger.js          JhaDebug — emit / batch flush scan trace events
 │   │   ├── delays.js                SCAN_DELAYS (scroll pacing; used by linkedin/scroll.js)
 │   │   └── messaging.js             ingestJob() + recordSkip() → INGEST_JOB
 │   ├── linkedin/
@@ -49,7 +51,7 @@ extension/
 │   │   ├── page.js                  One page + pagination via next link
 │   │   ├── overlay.js               Corner banner using .jha-scanning-overlay
 │   │   └── init.js                  Entry: wait for scanInProgress + scanConfig (same as LinkedIn)
-│   └── glassdoor/                   No shared/*.js — self-contained scripts, load order matters
+│   └── glassdoor/                   Loads **`shared/debug_logger.js`** only + site scripts; load order matters
 │       ├── parse.js                 parseGlassdoorCard — DOM fields + jl from card/listing URL
 │       ├── fetch_jd.js              GET job-listing HTML → __NEXT_DATA__ / JSON-LD / DOM; directApply → easy_apply
 │       ├── process.js               Per-card JD + INGEST_JOB (phantom / rateLimited handling)
@@ -65,7 +67,7 @@ extension/
 
 **Manifest permissions** include **`windows`** (with **`tabs`**, **`storage`**, **`scripting`**, **`activeTab`**) so the background script can open the search URL in a **separate popup window** via `chrome.windows.create` and remove the scan tab by id on completion or force-stop.
 
-**Content scripts** listed under `manifest.json` → `content_scripts` → `js` are plain scripts: they **do not** support `import` / `export` (no ES modules). Chrome injects them **in order** into a **shared global scope** for that match pattern. **LinkedIn and Indeed** list `content/shared/*.js` first so `sleep`, `SCAN_DELAYS`, `ingestJob`, and `recordSkip` exist before site scripts. **Glassdoor** does not load `shared/*`; it uses only `content/glassdoor/*.js` with **`init.js` last** so `scanGlassdoorPage` / `parseGlassdoorCard` / `fetchGlassdoorJD` are defined before the entry IIFE runs.
+**Content scripts** listed under `manifest.json` → `content_scripts` → `js` are plain scripts: they **do not** support `import` / `export` (no ES modules). Chrome injects them **in order** into a **shared global scope** for that match pattern. **LinkedIn and Indeed** list `content/shared/*.js` first so `sleep`, **`JhaDebug`**, `SCAN_DELAYS`, `ingestJob`, and `recordSkip` exist before site scripts. **Glassdoor** loads **`debug_logger.js`** only (plus site scripts), with **`init.js` last** so `scanGlassdoorPage` / `parseGlassdoorCard` / `fetchGlassdoorJD` are defined before the entry IIFE runs.
 
 The **service worker** uses **`importScripts()`** in `background/background.js`. That API loads additional scripts into the **same global scope** as the worker (like content scripts, no ES modules here). Paths are **relative to the service worker file’s directory** (e.g. `keepalive.js` next to `background.js`). This project does **not** use `"type": "module"` for the background script.
 
@@ -111,6 +113,12 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 | --- | --- |
 | `handleManualScan(options)` | Optional **`websiteOverride`** (from poll). Optional **`scan_all`**, **`scan_all_position`**, **`scan_all_total`** — when `scan_all` is true, these are included on **`POST /extension/run-log/start`** so the backend can attach Scan All metadata to the run log. Computes **`effectiveWebsite`** and uses it for **LinkedIn vs Indeed vs Glassdoor** branching, `scanConfig.website`, run-log `search_filters`, and search URL. Clears `stopRequested`, removes `scanPageState`, returns early if a scan is already in progress. PUTs **`/extension/state`** (stop flag + page counters), fetches config, `computeFtpr` for LinkedIn. **`POST /extension/run-log/start`** with body above, then **`chrome.windows.create`**, stores `scanConfig` / `liveProgress`, **`startKeepAlive()`**, **90-minute** safety timeout. |
 
+### `background/debug_flush.js`
+
+| Function | Description |
+| --- | --- |
+| `handleDebugLogFlush(runId, events)` | POSTs **`{ events }`** to **`/extension/run-log/{runId}/debug`**; on failure may retry with a trimmed payload. |
+
 ### `background/ingest.js`
 
 | Function | Description |
@@ -121,7 +129,7 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 
 | Function | Description |
 | --- | --- |
-| *(listener)* | On **every** message, **`stopKeepAlive()` + `startKeepAlive()`** to reset the keepalive timer while the SW handles work. Dispatches `MANUAL_SCAN`, `INGEST_JOB`, `GET_TAB_ID`, `GET_EXTENSION_STATE`, `PUT_EXTENSION_STATE`, `STOP_SCAN`, `TRIGGER_STOP`, `NAVIGATE_SCAN_TAB`, `SESSION_ERROR`, **`GET_CONFIG`** (GET `/config` for Glassdoor content scripts), **`CHECK_STOP`**, **`SCAN_STARTED`** (POST run-log for auto Glassdoor), **`SCAN_COMPLETE`** (PUT run-log for auto Glassdoor), **`GET_MAIN_WORLD_VALUE`** (Indeed API key in main world) to the appropriate handlers. |
+| *(listener)* | On **every** message, **`stopKeepAlive()` + `startKeepAlive()`** to reset the keepalive timer while the SW handles work. Dispatches `MANUAL_SCAN`, `INGEST_JOB`, **`DEBUG_LOG_FLUSH`** (batched debug events → **`debug_flush.js`**), `GET_TAB_ID`, `GET_EXTENSION_STATE`, `PUT_EXTENSION_STATE`, `STOP_SCAN`, `TRIGGER_STOP`, `NAVIGATE_SCAN_TAB`, `SESSION_ERROR`, **`GET_CONFIG`** (GET `/config` for Glassdoor content scripts), **`CHECK_STOP`**, **`SCAN_STARTED`** (POST run-log for auto Glassdoor), **`SCAN_COMPLETE`** (PUT run-log for auto Glassdoor), **`GET_MAIN_WORLD_VALUE`** (Indeed API key in main world) to the appropriate handlers. |
 
 ### `background/scan_completion.js`
 
@@ -149,6 +157,12 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | Function | Description |
 | --- | --- |
 | *(listener)* | On `chrome.runtime.onStartup`, clears stale `scanInProgress` / `liveProgress`. |
+
+### `content/shared/debug_logger.js`
+
+| Symbol | Description |
+| --- | --- |
+| `JhaDebug` | **`init(runId, scanStartMs)`**, **`emit(type, payload?)`** (truncates long strings / redacts credential-like keys), **`setPage(n)`**, **`finalize()`** — batches events to storage and **`DEBUG_LOG_FLUSH`** (every **100** events or **5s**). |
 
 ### `content/shared/utils.js`
 
@@ -346,6 +360,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | Type | Payload | Sent from | Handled in |
 | --- | --- | --- | --- |
 | `MANUAL_SCAN` | *(none)* | `popup/popup.js` | `background/runtime_messages.js` → `handleManualScan()` |
+| `DEBUG_LOG_FLUSH` | `{ runId, events }` | `content/shared/debug_logger.js` | `background/runtime_messages.js` → **`handleDebugLogFlush`** (`debug_flush.js`) |
 | `INGEST_JOB` | **`correlationId` set (LinkedIn/Indeed):** immediate **`{ ack, correlationId }`**, then **`handleIngest`** → **`tabs.sendMessage`** `INGEST_JOB_RESULT`. **No `correlationId` (Glassdoor):** legacy async **`sendResponse(result)`** after **`handleIngest`**. | `content/shared/messaging.js`, **`content/glassdoor/process.js`** | `background/runtime_messages.js` → `handleIngest()` |
 | `INGEST_JOB_RESULT` | `{ correlationId, result }` — delivered to the tab that sent `INGEST_JOB` | `background/runtime_messages.js` | `content/shared/messaging.js` (waiter map) |
 | `GET_TAB_ID` | *(none)* | `content/linkedin/init.js`, `content/indeed/init.js` | `background/runtime_messages.js` |
@@ -374,6 +389,7 @@ Internal scan coordination uses **`chrome.storage.local`**. Keys include:
 | `scanTimeoutId` | String id for the 90-minute safety `setTimeout` (cleared when `scanComplete` fires). |
 | `lastRunSummary` | Last completed run stats for the popup. |
 | `lastSessionError` | Session error key from content scripts for the warning banner. |
+| `debugLog` | While a scan runs: `{ runId, scanStartMs, events[], lastFlushAt }` for **`JhaDebug`**; cleared after final flush to the API (or on tab-safety cleanup). |
 | `backendUrl`, `authToken` | Connection settings (`settings.js`, popup). |
 
 Other keys may appear for short periods during saves or errors.

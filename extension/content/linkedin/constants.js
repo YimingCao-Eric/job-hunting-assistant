@@ -14,3 +14,9 @@ const NEXT_BUTTON_SELECTORS = [
   'button[aria-label*="next"]',
   "li.artdeco-pagination__indicator--number + li button",
 ];
+
+const PAGINATION_CONTAINER_SELECTORS = [
+  ".jobs-search-pagination",
+  ".artdeco-pagination",
+  '[aria-label="Pagination"]',
+];

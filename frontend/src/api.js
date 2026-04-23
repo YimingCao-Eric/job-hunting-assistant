@@ -385,6 +385,11 @@ export const api = {
     return r.json();
   },
 
+  // Whether a matching pipeline task is currently running on the backend.
+  // Returns { running: bool, mode: str|null }.
+  getMatchStatus: () =>
+    fetch(`${BASE_URL}/match/status`, { headers: headers() }).then((r) => r.json()),
+
   getMatchReports: () =>
     fetch(`${BASE_URL}/match/reports`, { headers: headers() }).then((r) => r.json()),
 

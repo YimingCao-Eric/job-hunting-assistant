@@ -20,6 +20,7 @@ class DedupReportRead(BaseModel):
     gate_results: dict[str, GateResult]
     skip_reason_counts: dict[str, int]
     duration_ms: int
+    debug_log: dict | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

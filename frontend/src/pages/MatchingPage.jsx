@@ -84,30 +84,46 @@ function levelLabel(level) {
   return map[level] || level
 }
 
+function formatElapsed(sec) {
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return s ? `${m}m ${s}s` : `${m}m`
+}
+
+function runningButtonTitle(key) {
+  const map = {
+    button1: '1. All CPU Work',
+    button2: '2. LLM Extraction + Gates',
+    button3: '3. CPU Score',
+    button4: '4. LLM Score',
+  }
+  return map[key] || 'Pipeline'
+}
+
+// Maps backend mode strings to frontend button keys.
+// Used when rehydrating "running" state from GET /match/status on mount.
+const MODE_TO_BUTTON_KEY = {
+  cpu_only: 'button1',
+  llm_extraction_gates: 'button2',
+  cpu_score: 'button3',
+  llm_score: 'button4',
+}
+
 async function waitForMatchReportCountAbove(
   previousCount,
-  { timeoutMs = 300_000, intervalMs = 3000, onLogLine = null } = {},
+  { timeoutMs = 900_000, intervalMs = 3000 } = {},
 ) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs))
-    const [reports, logs] = await Promise.all([
-      api.getMatchReports(),
-      onLogLine ? api.getMatchLogs().catch(() => null) : Promise.resolve(null),
-    ])
+    const reports = await api.getMatchReports()
     const n = Array.isArray(reports) ? reports.length : 0
-    if (onLogLine) {
-      const lines = logs?.lines || []
-      const lastLine = lines[lines.length - 1] || ''
-      const trimmed = lastLine.replace(
-        /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+\s+/,
-        '',
-      ).slice(0, 120)
-      onLogLine(trimmed)
-    }
     if (n > previousCount) return
   }
-  throw new Error('Matching run timed out after 5 minutes')
+  throw new Error(
+    `Matching run timed out after ${Math.round(timeoutMs / 60_000)} minutes (task may still be running on the backend)`,
+  )
 }
 
 function buildPageList(page, totalPages) {
@@ -168,7 +184,7 @@ function PageNumbers({ page, totalPages, onPageChange }) {
   )
 }
 
-function buildMatchFooter(job, mainFilter) {
+function buildMatchFooter(job, mainFilter, showLevelBadge) {
   if (mainFilter === 'removed' || mainFilter === 'all') {
     if (job.skip_reason) return <DedupSkipBadge job={job} />
     if (job.dismissed) {
@@ -183,7 +199,7 @@ function buildMatchFooter(job, mainFilter) {
     return <MatchSkipBadge reason={job.match_skip_reason} job={job} />
   }
   if (job.match_level) {
-    return <MatchBadge job={job} />
+    return <MatchBadge job={job} showLevelBadge={showLevelBadge} />
   }
   return null
 }
@@ -220,6 +236,11 @@ export default function MatchingPage() {
   const [dupSubFilter, setDupSubFilter] = useState('all')
   const [blacklistSubFilter, setBlacklistSubFilter] = useState('all')
   const [matchLevelFilter, setMatchLevelFilter] = useState(null)
+  const [incompleteJdFilter, setIncompleteJdFilter] = useState(false)
+  const [incompleteJdTotal, setIncompleteJdTotal] = useState(0)
+  const [removalStageFilter, setRemovalStageFilter] = useState(null)
+  const [removalStageCpuTotal, setRemovalStageCpuTotal] = useState(0)
+  const [removalStageLlmTotal, setRemovalStageLlmTotal] = useState(0)
 
   const [passedTotal, setPassedTotal] = useState(0)
   const [removedTotal, setRemovedTotal] = useState(0)
@@ -247,9 +268,9 @@ export default function MatchingPage() {
   const [reportSubmitting, setReportSubmitting] = useState(false)
 
   const [running, setRunning] = useState(null)
+  const [runFlash, setRunFlash] = useState(null)
   const [undoing, setUndoing] = useState(null)
   const [runElapsedSec, setRunElapsedSec] = useState(0)
-  const [latestLogLine, setLatestLogLine] = useState('')
   const elapsedTimerRef = useRef(null)
 
   const [selectedJob, setSelectedJob] = useState(null)
@@ -258,7 +279,7 @@ export default function MatchingPage() {
 
   const detectPipelineState = useCallback(async () => {
     try {
-      const [anyRemoved, extracted, llmRes, scoredRes, stepDRes] = await Promise.all([
+      const [anyRemoved, extracted, llmRes, scoredRes, stepDRes, reports] = await Promise.all([
         api.getJobs({ dedup_status: 'removed', limit: 1, offset: 0 }),
         api.getMatchExtractedCount().catch(() => ({ count: 0 })),
         api.getJobs({ matching_mode: 'llm', limit: 1, offset: 0 }).catch(() => ({ total: 0 })),
@@ -275,8 +296,11 @@ export default function MatchingPage() {
           limit: 1,
           offset: 0,
         }).catch(() => ({ total: 0 })),
+        api.getMatchReports().catch(() => []),
       ])
-      const button4Done = (stepDRes.total ?? 0) > 0
+      const button4FromReports =
+        Array.isArray(reports) && reports.some((r) => r.matching_mode === 'llm_score')
+      const button4Done = button4FromReports || (stepDRes.total ?? 0) > 0
       setPipelineState({
         button1Done:
           (anyRemoved.total ?? 0) > 0 || (extracted.count ?? 0) > 0,
@@ -356,6 +380,31 @@ export default function MatchingPage() {
         )
       )
       setLevelCounts(Object.fromEntries(lcEntries))
+
+      const [cpuSt, llmSt, jdInc] = await Promise.all([
+        api.getJobs({
+          dedup_status: 'removed',
+          removal_stage: 'cpu_work',
+          limit: 1,
+          offset: 0,
+        }),
+        api.getJobs({
+          dedup_status: 'removed',
+          removal_stage: 'llm_extraction',
+          limit: 1,
+          offset: 0,
+        }),
+        api.getJobs({
+          dedup_status: 'passed',
+          match_status: 'scored',
+          jd_incomplete: true,
+          limit: 1,
+          offset: 0,
+        }),
+      ])
+      setRemovalStageCpuTotal(cpuSt.total ?? 0)
+      setRemovalStageLlmTotal(llmSt.total ?? 0)
+      setIncompleteJdTotal(jdInc.total ?? 0)
     } catch (e) {
       console.error('loadTotals', e)
     }
@@ -376,6 +425,7 @@ export default function MatchingPage() {
         if (subFilter === 'scored') {
           params.match_status = 'scored'
           params.order_by = 'fit_score'
+          if (incompleteJdFilter) params.jd_incomplete = true
         }
         if (matchLevelFilter) params.match_level = matchLevelFilter
       } else if (mainFilter === 'removed') {
@@ -397,6 +447,10 @@ export default function MatchingPage() {
           }
         } else if (GATE_REASONS.includes(subFilter)) {
           params.match_skip_reason_filter = subFilter
+          params.dismissed = false
+        }
+        if (removalStageFilter) {
+          params.removal_stage = removalStageFilter
         }
       }
 
@@ -414,6 +468,8 @@ export default function MatchingPage() {
     dupSubFilter,
     blacklistSubFilter,
     matchLevelFilter,
+    incompleteJdFilter,
+    removalStageFilter,
     page,
   ])
 
@@ -470,7 +526,6 @@ export default function MatchingPage() {
   useEffect(() => {
     if (running) {
       setRunElapsedSec(0)
-      setLatestLogLine('')
       elapsedTimerRef.current = setInterval(() => {
         setRunElapsedSec((s) => s + 1)
       }, 1000)
@@ -480,7 +535,6 @@ export default function MatchingPage() {
         elapsedTimerRef.current = null
       }
       setRunElapsedSec(0)
-      setLatestLogLine('')
     }
     return () => {
       if (elapsedTimerRef.current) {
@@ -489,6 +543,52 @@ export default function MatchingPage() {
       }
     }
   }, [running])
+
+  // On mount: check if a matching task is already running on the backend.
+  // If so, restore `running` state and resume polling. Fixes the bug where
+  // navigating away and back made the UI forget a live run was in progress.
+  useEffect(() => {
+    let cancelled = false
+
+    async function rehydrate() {
+      try {
+        const status = await api.getMatchStatus()
+        if (cancelled) return
+        if (!status?.running) return
+
+        const buttonKey = MODE_TO_BUTTON_KEY[status.mode]
+        if (!buttonKey) return
+
+        setRunning(buttonKey)
+        const beforeReports = (await api.getMatchReports()).length
+        try {
+          await waitForMatchReportCountAbove(beforeReports, { timeoutMs: 1_800_000 })
+          if (cancelled) return
+          await detectPipelineState()
+          await loadTotals()
+          await loadJobs()
+          setRunFlash(buttonKey)
+          window.setTimeout(() => {
+            setRunFlash((x) => (x === buttonKey ? null : x))
+          }, 2000)
+        } catch (e) {
+          if (cancelled) return
+          setError(e instanceof Error ? e.message : 'Background run check failed')
+        } finally {
+          if (!cancelled) setRunning(null)
+        }
+      } catch {
+        // If /match/status itself fails, don't block the UI — just leave the
+        // page in its default non-running state.
+      }
+    }
+
+    rehydrate()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only rehydration
+  }, [])
 
   async function handleRun(button) {
     setRunning(button)
@@ -502,9 +602,7 @@ export default function MatchingPage() {
       } else if (button === 'button2') {
         const beforeReports = (await api.getMatchReports()).length
         await api.runMatching({ mode: 'llm_extraction_gates' })
-        await waitForMatchReportCountAbove(beforeReports, {
-          onLogLine: (line) => setLatestLogLine(line),
-        })
+        await waitForMatchReportCountAbove(beforeReports, { timeoutMs: 1_800_000 })
       } else if (button === 'button3') {
         const beforeReports = (await api.getMatchReports()).length
         await api.runMatching({ mode: 'cpu_score' })
@@ -512,14 +610,16 @@ export default function MatchingPage() {
       } else if (button === 'button4') {
         const beforeReports = (await api.getMatchReports()).length
         await api.runMatching({ mode: 'llm_score' })
-        await waitForMatchReportCountAbove(beforeReports, {
-          timeoutMs: 300_000,
-          onLogLine: (line) => setLatestLogLine(line),
-        })
+        await waitForMatchReportCountAbove(beforeReports, { timeoutMs: 1_800_000 })
       }
       await detectPipelineState()
       await loadTotals()
       await loadJobs()
+      const doneBtn = button
+      setRunFlash(doneBtn)
+      window.setTimeout(() => {
+        setRunFlash((x) => (x === doneBtn ? null : x))
+      }, 2000)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Run failed')
     } finally {
@@ -630,11 +730,21 @@ export default function MatchingPage() {
         <div className={s.buttonGroup}>
           <button
             type="button"
-            className={s.runBtn}
+            className={`${s.runBtn} ${running === 'button1' ? s.runBtnSpinner : ''} ${runFlash === 'button1' ? s.runBtnFlash : ''}`}
             onClick={() => handleRun('button1')}
             disabled={running !== null}
           >
-            {running === 'button1' ? 'Running…' : '1. All CPU Work'}
+            {running === 'button1'
+              ? (
+                  <>
+                    <span className={s.spinnerGlyph} aria-hidden />
+                    {' '}
+                    1. All CPU Work
+                    {' '}
+                    <span className={s.runElapsed}>{formatElapsed(runElapsedSec)}</span>
+                  </>
+                )
+              : '1. All CPU Work'}
           </button>
           <button
             type="button"
@@ -652,7 +762,7 @@ export default function MatchingPage() {
         <div className={s.buttonGroup}>
           <button
             type="button"
-            className={s.runBtn}
+            className={`${s.runBtn} ${running === 'button2' ? s.runBtnSpinner : ''} ${runFlash === 'button2' ? s.runBtnFlash : ''}`}
             onClick={() => handleRun('button2')}
             disabled={
               !pipelineState.button1Done
@@ -667,7 +777,17 @@ export default function MatchingPage() {
                   : ''
             }
           >
-            {running === 'button2' ? 'Running…' : '2. LLM Extraction + Gates'}
+            {running === 'button2'
+              ? (
+                  <>
+                    <span className={s.spinnerGlyph} aria-hidden />
+                    {' '}
+                    2. LLM Extraction + Gates
+                    {' '}
+                    <span className={s.runElapsed}>{formatElapsed(runElapsedSec)}</span>
+                  </>
+                )
+              : '2. LLM Extraction + Gates'}
           </button>
           <button
             type="button"
@@ -685,11 +805,21 @@ export default function MatchingPage() {
         <div className={s.buttonGroup}>
           <button
             type="button"
-            className={s.runBtn}
+            className={`${s.runBtn} ${running === 'button3' ? s.runBtnSpinner : ''} ${runFlash === 'button3' ? s.runBtnFlash : ''}`}
             onClick={() => handleRun('button3')}
             disabled={!pipelineState.button1Done || running !== null}
           >
-            {running === 'button3' ? 'Running…' : '3. CPU Score'}
+            {running === 'button3'
+              ? (
+                  <>
+                    <span className={s.spinnerGlyph} aria-hidden />
+                    {' '}
+                    3. CPU Score
+                    {' '}
+                    <span className={s.runElapsed}>{formatElapsed(runElapsedSec)}</span>
+                  </>
+                )
+              : '3. CPU Score'}
           </button>
           <button
             type="button"
@@ -707,7 +837,7 @@ export default function MatchingPage() {
         <div className={s.buttonGroup}>
           <button
             type="button"
-            className={s.runBtn}
+            className={`${s.runBtn} ${running === 'button4' ? s.runBtnSpinner : ''} ${runFlash === 'button4' ? s.runBtnFlash : ''}`}
             onClick={() => handleRun('button4')}
             disabled={
               !pipelineState.button3Done
@@ -722,7 +852,17 @@ export default function MatchingPage() {
                   : ''
             }
           >
-            {running === 'button4' ? 'Running…' : '4. LLM Score'}
+            {running === 'button4'
+              ? (
+                  <>
+                    <span className={s.spinnerGlyph} aria-hidden />
+                    {' '}
+                    4. LLM Score
+                    {' '}
+                    <span className={s.runElapsed}>{formatElapsed(runElapsedSec)}</span>
+                  </>
+                )
+              : '4. LLM Score'}
           </button>
           <button
             type="button"
@@ -740,32 +880,18 @@ export default function MatchingPage() {
 
       {running && (
         <div className={s.runningStatus} aria-live="polite">
-          <div>
-            {running === 'button4'
-              ? '4. LLM Score'
-              : running === 'button2'
-                ? '2. LLM Extraction + Gates'
-                : running === 'button3'
-                  ? '3. CPU Score'
-                  : running === 'button1'
-                    ? '1. All CPU Work'
-                    : 'Pipeline'}
-            {' '}
-            running…
-            {' '}
-            {runElapsedSec}
-            s
-            {runElapsedSec > 10 && (
-              <span className={s.runningHint}> — processing in background</span>
-            )}
-          </div>
-          {latestLogLine
-            ? (
-                <div className={s.logLine} title={latestLogLine}>
-                  {latestLogLine}
-                </div>
-              )
-            : null}
+          {'\u23f3'}
+          {' '}
+          Running
+          {' '}
+          {runningButtonTitle(running)}
+          … (
+          {formatElapsed(runElapsedSec)}
+          {' '}
+          elapsed)
+          {runElapsedSec > 10 && (
+            <span className={s.runningHint}> — processing in background</span>
+          )}
         </div>
       )}
 
@@ -778,6 +904,8 @@ export default function MatchingPage() {
               setMainFilter('passed')
               setSubFilter('all')
               setMatchLevelFilter(null)
+              setRemovalStageFilter(null)
+              setIncompleteJdFilter(false)
               setPage(1)
             }}
           >
@@ -793,6 +921,8 @@ export default function MatchingPage() {
               setSubFilter('all')
               setDupSubFilter('all')
               setBlacklistSubFilter('all')
+              setRemovalStageFilter(null)
+              setIncompleteJdFilter(false)
               setPage(1)
             }}
           >
@@ -812,6 +942,7 @@ export default function MatchingPage() {
                 onClick={() => {
                   setSubFilter(f)
                   setMatchLevelFilter(null)
+                  if (f !== 'scored') setIncompleteJdFilter(false)
                   setPage(1)
                 }}
               >
@@ -822,6 +953,20 @@ export default function MatchingPage() {
                     : `Scored (${scoredTotal})`}
               </button>
             ))}
+            {subFilter === 'scored' && (
+              <button
+                type="button"
+                className={`${s.subFilter} ${incompleteJdFilter ? s.subFilterActive : ''}`}
+                onClick={() => {
+                  setIncompleteJdFilter((v) => !v)
+                  setPage(1)
+                }}
+              >
+                Incomplete JD (
+                {incompleteJdTotal}
+                )
+              </button>
+            )}
             {subFilter === 'scored' && pipelineState.button4Done && (
               <div className={s.matchLevelPills}>
                 {['strong_match', 'possible_match', 'stretch_match', 'weak_match'].map(
@@ -859,6 +1004,7 @@ export default function MatchingPage() {
                   setSubFilter(f)
                   setDupSubFilter('all')
                   setBlacklistSubFilter('all')
+                  setRemovalStageFilter(null)
                   setPage(1)
                 }}
               >
@@ -895,6 +1041,32 @@ export default function MatchingPage() {
                 </span>
               </button>
             ))}
+            <button
+              type="button"
+              className={`${s.subFilter} ${removalStageFilter === 'cpu_work' ? s.subFilterActive : ''}`}
+              onClick={() => {
+                setRemovalStageFilter((cur) => (cur === 'cpu_work' ? null : 'cpu_work'))
+                setPage(1)
+              }}
+            >
+              CPU Stage (
+              {removalStageCpuTotal}
+              )
+            </button>
+            <button
+              type="button"
+              className={`${s.subFilter} ${removalStageFilter === 'llm_extraction' ? s.subFilterActive : ''}`}
+              onClick={() => {
+                setRemovalStageFilter((cur) =>
+                  cur === 'llm_extraction' ? null : 'llm_extraction',
+                )
+                setPage(1)
+              }}
+            >
+              LLM Stage (
+              {removalStageLlmTotal}
+              )
+            </button>
 
             {subFilter === 'duplicates' && (
               <div className={s.subSubFilters}>
@@ -1017,6 +1189,22 @@ export default function MatchingPage() {
                   </button>
                 )}
                 {mainFilter === 'removed'
+                  && job.match_skip_reason
+                  && !job.skip_reason
+                  && !job.dismissed && (
+                  <button
+                    type="button"
+                    className={s.dismissBtn}
+                    title="Dismiss this job"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setConfirmDismiss(job.id)
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+                {mainFilter === 'removed'
                   && job.dismissed
                   && subFilter === 'blacklist'
                   && blacklistSubFilter === 'dismissed' && (
@@ -1046,7 +1234,7 @@ export default function MatchingPage() {
                 <JobCard
                   job={job}
                   onClick={() => setSelectedJob(job)}
-                  footer={buildMatchFooter(job, mainFilter)}
+                  footer={buildMatchFooter(job, mainFilter, pipelineState.button4Done)}
                 />
               </div>
             ))}

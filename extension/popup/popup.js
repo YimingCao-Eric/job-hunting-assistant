@@ -5,7 +5,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   })
 
   const refresh = async () => {
-    const { liveProgress, scanInProgress } = await chrome.storage.local.get(['liveProgress', 'scanInProgress'])
+    const { liveProgress, lastRunSummary, scanInProgress } =
+      await chrome.storage.local.get(['liveProgress', 'lastRunSummary', 'scanInProgress'])
     const status = document.getElementById('status')
     const progress = document.getElementById('progress')
 
@@ -19,13 +20,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else {
       status.textContent = 'Idle'
       status.className = 'idle'
-      progress.textContent = liveProgress
-        ? `Last: ${liveProgress.scraped || 0} scraped · ${liveProgress.new_jobs || 0} new`
-        : 'No recent scan'
+      if (lastRunSummary) {
+        progress.textContent =
+          `Last: ${lastRunSummary.scraped || 0} scraped · ${lastRunSummary.new_jobs || 0} new`
+      } else {
+        progress.textContent = 'No recent scan'
+      }
     }
   }
 
   await refresh()
-  // Poll while popup is open
   setInterval(refresh, 1000)
 })

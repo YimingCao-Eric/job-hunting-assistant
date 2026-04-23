@@ -18,6 +18,7 @@
       "matches": ["https://www.linkedin.com/jobs/*"],
       "js": [
         "content/shared/utils.js",
+        "content/shared/debug_logger.js",
         "content/shared/delays.js",
         "content/shared/messaging.js",
         "content/linkedin/constants.js",
@@ -36,6 +37,7 @@
       "matches": ["https://ca.indeed.com/jobs*"],
       "js": [
         "content/shared/utils.js",
+        "content/shared/debug_logger.js",
         "content/shared/delays.js",
         "content/shared/messaging.js",
         "content/indeed/dom.js",
@@ -55,6 +57,7 @@
         "https://glassdoor.ca/*"
       ],
       "js": [
+        "content/shared/debug_logger.js",
         "content/glassdoor/parse.js",
         "content/glassdoor/fetch_jd.js",
         "content/glassdoor/process.js",

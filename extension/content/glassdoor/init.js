@@ -10,9 +10,45 @@ function sleep(ms) {
 
 async function runManualGlassdoorScan(config) {
   const url = window.location.href;
+  await JhaDebug.init(config.runId, Date.now());
+
+  await JhaDebug.emit("scan_start", {
+    runId: config.runId,
+    source: "glassdoor",
+    entry: "manual",
+    url,
+    keyword: config.glassdoor?.keyword || null,
+    location: config.glassdoor?.location || null,
+    filters: config.glassdoor || null,
+  });
+
+  const session = (() => {
+    if (url.includes("/member/login") || url.includes("/profile/login"))
+      return "expired";
+    return "live";
+  })();
+
+  await JhaDebug.emit("session_check", {
+    result: session,
+    cookie_length: document.cookie.length,
+    has_glassdoor_session_cookies:
+      document.cookie.includes("GDSESSION") ||
+      document.cookie.includes("gdId"),
+  });
+
   const u = url.toLowerCase();
   if (!u.includes("srch_") && !u.includes("/job/")) {
     console.warn("[JHA-Glassdoor] manual scan: not a job listing/search URL");
+    await JhaDebug.emit(
+      "error",
+      {
+        where: "glassdoor_manual_init",
+        message: "not_a_job_search_page",
+        url,
+      },
+      "error"
+    );
+    await JhaDebug.finalize();
     await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
     await chrome.storage.local.set({
       scanInProgress: false,
@@ -34,6 +70,12 @@ async function runManualGlassdoorScan(config) {
     return;
   }
 
+  await JhaDebug.emit("page_load", {
+    url,
+    state_source: "inline",
+  });
+  JhaDebug.setPage(1);
+
   const tabResult = await new Promise((resolve) =>
     chrome.runtime.sendMessage({ type: "GET_TAB_ID" }, resolve)
   );
@@ -41,8 +83,33 @@ async function runManualGlassdoorScan(config) {
 
   console.log("[JHA-Glassdoor] manual scan starting", { url, runId: config.runId });
 
+  const heartbeatInterval = setInterval(async () => {
+    try {
+      const { _keepalive } = await chrome.storage.local.get("_keepalive");
+      await JhaDebug.emit("heartbeat", {
+        url: location.href,
+        storage_keepalive_age_ms: _keepalive ? Date.now() - _keepalive : null,
+      });
+    } catch (_) {
+      /* never throw */
+    }
+  }, 10000);
+
   try {
     const counters = await scanGlassdoorPage(config, config.runId);
+
+    await JhaDebug.emit("scan_end", {
+      summary: {
+        scraped: counters.scraped,
+        new_jobs: counters.new_jobs,
+        existing: counters.existing,
+        jd_failed: counters.jd_failed,
+        stale_skipped: counters.stale_skipped,
+        pages_scanned: counters.pages ?? 0,
+        errors_count: (counters.errors || []).length,
+      },
+    });
+    await JhaDebug.finalize();
 
     await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
     await chrome.storage.local.set({
@@ -64,6 +131,16 @@ async function runManualGlassdoorScan(config) {
     });
   } catch (e) {
     console.error("[JHA-Glassdoor] Scan error:", e);
+    await JhaDebug.emit(
+      "error",
+      {
+        where: "glassdoor_manual_scan",
+        message: e.message,
+        stack: e.stack,
+      },
+      "error"
+    );
+    await JhaDebug.finalize();
     await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
     await chrome.storage.local.set({
       scanInProgress: false,
@@ -83,6 +160,8 @@ async function runManualGlassdoorScan(config) {
         completedAt: Date.now(),
       },
     });
+  } finally {
+    clearInterval(heartbeatInterval);
   }
 }
 

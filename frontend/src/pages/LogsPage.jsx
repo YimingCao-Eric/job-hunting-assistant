@@ -4,6 +4,7 @@ import { formatAbsoluteTime } from '../utils/time'
 import { detectWebsiteFromRunLog } from '../utils/runLog'
 import PageTitle from '../components/PageTitle'
 import Spinner from '../components/Spinner'
+import DebugTracePanel from '../components/DebugTracePanel'
 import s from './LogsPage.module.css'
 import j from './JobsPage.module.css'
 
@@ -137,10 +138,9 @@ function runStatusClass(status) {
   return s.runStatus
 }
 
-/** Fixed order; url_exact omitted (removed from service). Only render keys present in gate_results. */
+/** Fixed order; url_exact omitted (removed from service). language omitted (moved to matching CPU gates). */
 const GATE_ORDER = [
   { key: 'pass_0', label: 'Pass 0' },
-  { key: 'language', label: 'Language' },
   { key: 'title_mismatch', label: 'Title Mismatch' },
   { key: 'contract_mismatch', label: 'Contract' },
   { key: 'remote_mismatch', label: 'Remote' },
@@ -243,6 +243,9 @@ function MatchReportCard({ report, open, onToggle }) {
               {formatGateTimeMs(report.duration_ms)}
             </div>
           </div>
+          {report.debug_log?.events?.length > 0 && (
+            <DebugTracePanel runLog={{ id: String(report.id), debug_log: report.debug_log }} />
+          )}
         </div>
       )}
     </div>
@@ -323,6 +326,9 @@ function DedupReportCard({ report, open, onToggle }) {
               ))
             )}
           </div>
+          {report.debug_log?.events?.length > 0 && (
+            <DebugTracePanel runLog={{ id: String(report.id), debug_log: report.debug_log }} />
+          )}
         </div>
       )}
     </div>
@@ -614,6 +620,8 @@ function RunCard({
               )}
             </div>
           )}
+
+          <DebugTracePanel runLog={run} />
         </div>
       )}
     </div>

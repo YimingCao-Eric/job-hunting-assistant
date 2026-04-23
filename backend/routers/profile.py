@@ -36,10 +36,22 @@ def deep_merge(base: dict, overlay: dict) -> dict:
 
 
 def _normalise_extra_skills_for_save(raw: list[str] | None) -> list[str]:
-    """Map aliases to canonical names; dedupe case-insensitively. Unknown → stripped string."""
+    """Split CSV tokens, map aliases to canonical names; dedupe preserving order."""
+    tokens: list[str] = []
+    for raw_skill in raw or []:
+        s = str(raw_skill).strip()
+        if not s:
+            continue
+        if "," in s:
+            for part in s.split(","):
+                t = part.strip()
+                if t:
+                    tokens.append(t)
+        else:
+            tokens.append(s)
     normalised: list[str] = []
     seen: set[str] = set()
-    for raw_skill in raw or []:
+    for raw_skill in tokens:
         canonical = normalise(raw_skill)
         if not canonical:
             continue

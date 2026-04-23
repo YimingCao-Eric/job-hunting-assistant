@@ -78,6 +78,9 @@ export default function JobCard({ job, onClick, footer }) {
         {isRemote && <span className={s.remoteBadge}>Remote</span>}
         {isIntern && <span className={s.internBadge}>Co-op/Intern</span>}
         {job.easy_apply && <span className={s.easyApplyBadge}>{'\u26a1'} Easy Apply</span>}
+        {job.jd_incomplete && job.skip_reason !== 'already_scraped' && (
+          <span className={s.jdIncompleteBadge}>Incomplete JD</span>
+        )}
         {isPromoted && <span className={s.promotedBadge}>Promoted</span>}
       </div>
       <div className={s.cardTitle}>{job.job_title}</div>

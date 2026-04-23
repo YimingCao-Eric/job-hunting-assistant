@@ -54,3 +54,4 @@ class RunLogRead(BaseModel):
     scan_all: bool = False
     scan_all_position: int | None = None
     scan_all_total: int | None = None
+    debug_log: dict | None = None
