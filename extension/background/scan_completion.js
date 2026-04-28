@@ -5,35 +5,27 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   if (!changes.scanComplete.newValue) return;
 
   const { scanTimeoutId } = await chrome.storage.local.get("scanTimeoutId");
-  if (scanTimeoutId) {
-    clearTimeout(parseInt(scanTimeoutId));
+  if (scanTimeoutId != null) {
+    clearTimeout(scanTimeoutId);
     chrome.storage.local.remove("scanTimeoutId");
   }
 
-  const { tabId, summary, runId } = changes.scanComplete.newValue;
+  const { tabId, summary, runId, completedAt } = changes.scanComplete.newValue;
   const { backendUrl, authToken } = await getSettings();
 
-  const { debugLog } = await chrome.storage.local.get("debugLog");
-  if (
-    debugLog &&
-    debugLog.runId === runId &&
-    Array.isArray(debugLog.events) &&
-    debugLog.events.length
-  ) {
-    try {
-      await fetch(`${backendUrl}/extension/run-log/${runId}/debug`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ events: debugLog.events }),
-      });
-    } catch (e) {
-      console.warn("[JHA] Final debug flush failed:", e.message);
-    }
+  let status = "completed";
+  let errorMessage = null;
+
+  if (summary?.aborted_reason === "backend_unavailable") {
+    status = "failed";
+    errorMessage = "Backend was unavailable during scan; please retry";
+  } else if (summary?.aborted_reason === "sw_died") {
+    status = "failed";
+    errorMessage = "Service worker died during scan; please retry";
   }
-  await chrome.storage.local.remove("debugLog");
+
+  const pagesScanned =
+    summary?.pages_scanned ?? summary?.pages ?? 1;
 
   try {
     await fetch(`${backendUrl}/extension/run-log/${runId}`, {
@@ -43,15 +35,16 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        status: "completed",
+        status,
         completed_at: new Date().toISOString(),
-        pages_scanned: summary.pages_scanned,
-        scraped: summary.scraped,
-        new_jobs: summary.new_jobs,
-        existing: summary.existing,
-        stale_skipped: summary.stale_skipped,
-        jd_failed: summary.jd_failed,
-        errors: summary.errors || [],
+        pages_scanned: pagesScanned,
+        scraped: summary.scraped ?? 0,
+        new_jobs: summary.new_jobs ?? 0,
+        existing: summary.existing ?? 0,
+        stale_skipped: summary.stale_skipped ?? 0,
+        jd_failed: summary.jd_failed ?? 0,
+        errors: summary.errors ?? null,
+        ...(errorMessage ? { error_message: errorMessage } : {}),
       }),
     });
   } catch (e) {
@@ -59,7 +52,11 @@ chrome.storage.onChanged.addListener(async (changes, area) => {
   }
 
   stopKeepAlive();
+  stopActivePolling();
   chrome.storage.local.remove(["scanComplete", "scanPageState"]);
-  chrome.storage.local.set({ lastRunSummary: summary, liveProgress: null });
+  chrome.storage.local.set({
+    lastRunSummary: { ...summary, completedAt: completedAt ?? null },
+    liveProgress: null,
+  });
   if (tabId) chrome.tabs.remove(tabId);
 });

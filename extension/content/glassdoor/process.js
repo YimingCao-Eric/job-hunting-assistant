@@ -91,14 +91,7 @@ async function processGlassdoorCard(cardEl, config, counters) {
   };
 
   const ingStart = Date.now();
-  const result = await new Promise((resolve) =>
-    chrome.runtime.sendMessage({ type: "INGEST_JOB", job }, (r) => {
-      if (r !== undefined) { resolve(r); return; }
-      setTimeout(() => {
-        chrome.runtime.sendMessage({ type: "INGEST_JOB", job }, resolve);
-      }, 2000);
-    })
-  );
+  const result = await ingestJob(job);
 
   const resultType = !result
     ? "no_response"
@@ -150,9 +143,15 @@ async function processGlassdoorCard(cardEl, config, counters) {
 
   if (result.already_exists || result.content_duplicate) {
     counters.existing++;
+    await chrome.storage.local.set({
+      liveProgress: { ...counters, page: counters.page ?? 1 },
+    });
     return { existing: true };
   }
 
   counters.new_jobs++;
+  await chrome.storage.local.set({
+    liveProgress: { ...counters, page: counters.page ?? 1 },
+  });
   return { ingested: true, jobId: result.id };
 }

@@ -10,22 +10,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     const status = document.getElementById('status')
     const progress = document.getElementById('progress')
 
-    if (scanInProgress) {
+    const formatProgressLine = (p) => {
+      const parts = [
+        `Scraped: ${p.scraped || 0}`,
+        `New: ${p.new_jobs || 0}`,
+        `Existing: ${p.existing || 0}`,
+        `Failed: ${p.jd_failed || 0}`,
+      ]
+      if (p.completedAt != null) {
+        const d = new Date(p.completedAt)
+        if (!Number.isNaN(d.getTime())) {
+          parts.push(`Done: ${d.toLocaleString()}`)
+        }
+      }
+      return parts.join('  ·  ')
+    }
+
+    if (scanInProgress && liveProgress) {
       status.textContent = 'Scanning...'
       status.className = 'scanning'
-      if (liveProgress) {
-        progress.textContent =
-          `Scraped: ${liveProgress.scraped || 0}  ·  New: ${liveProgress.new_jobs || 0}  ·  Failed: ${liveProgress.jd_failed || 0}`
-      }
+      progress.textContent = formatProgressLine(liveProgress)
+    } else if (lastRunSummary) {
+      status.textContent = scanInProgress ? 'Scanning…' : 'Idle'
+      status.className = scanInProgress ? 'scanning' : 'idle'
+      progress.textContent = formatProgressLine(lastRunSummary)
     } else {
-      status.textContent = 'Idle'
-      status.className = 'idle'
-      if (lastRunSummary) {
-        progress.textContent =
-          `Last: ${lastRunSummary.scraped || 0} scraped · ${lastRunSummary.new_jobs || 0} new`
-      } else {
-        progress.textContent = 'No recent scan'
-      }
+      status.textContent = scanInProgress ? 'Scanning…' : 'Idle'
+      status.className = scanInProgress ? 'scanning' : 'idle'
+      progress.textContent = 'No recent scan'
     }
   }
 

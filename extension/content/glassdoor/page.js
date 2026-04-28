@@ -1,5 +1,7 @@
 /* ── Glassdoor page-level scan loop (SERP + "Show more jobs" pagination) ─ */
 
+const SHOW_MORE_TEXTS = ["show more jobs", "voir plus d'emplois"];
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -49,6 +51,7 @@ async function scanGlassdoorPage(config, runId) {
   while (true) {
     pageNum++;
     JhaDebug.setPage(pageNum);
+    counters.page = pageNum;
 
     await JhaDebug.emit("page_start", {
       url: location.href,
@@ -100,12 +103,45 @@ async function scanGlassdoorPage(config, runId) {
     console.log(`[JHA-Glassdoor] found ${cards.length} new cards on page ${pageNum}`);
 
     let stopRequested = false;
+    let scrapeAborted = false;
 
     for (let idx = 0; idx < cards.length; idx++) {
       const cardEl = cards[idx];
       const jobId = cardJobId(cardEl);
       if (!jobId) continue;
       processedJobIds.add(jobId);
+
+      const flags = await chrome.storage.local.get([
+        "_backendDownDuringScan",
+        "_watchdogTripped",
+      ]);
+      if (flags._backendDownDuringScan) {
+        await JhaDebug.emit(
+          "error",
+          {
+            where: "scrape_loop",
+            message: "backend_unavailable",
+            reason: "ingest_retries_exhausted",
+          },
+          "error"
+        );
+        counters.aborted_reason = "backend_unavailable";
+        scrapeAborted = true;
+        break;
+      }
+      if (flags._watchdogTripped) {
+        await JhaDebug.emit(
+          "error",
+          {
+            where: "scrape_loop",
+            message: "sw_died_detected",
+          },
+          "error"
+        );
+        counters.aborted_reason = "sw_died";
+        scrapeAborted = true;
+        break;
+      }
 
       const stopFlag = await new Promise((r) =>
         chrome.runtime.sendMessage({ type: "CHECK_STOP", runId }, r)
@@ -148,6 +184,11 @@ async function scanGlassdoorPage(config, runId) {
 
     counters.pages = pageNum;
 
+    if (scrapeAborted) {
+      await emitPageEnd(counters, pageNum, true);
+      break;
+    }
+
     if (stopRequested) {
       console.log("[JHA-Glassdoor] halting pagination — user stop");
       break;
@@ -156,7 +197,9 @@ async function scanGlassdoorPage(config, runId) {
     await emitPageEnd(counters, pageNum, false);
 
     const showMoreBtn = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.offsetParent !== null && b.textContent.trim() === "Show more jobs"
+      (b) =>
+        b.offsetParent !== null &&
+        SHOW_MORE_TEXTS.includes(b.textContent.trim().toLowerCase())
     );
 
     await JhaDebug.emit("show_more_poll", {

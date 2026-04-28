@@ -48,13 +48,13 @@ async function processCard(anchor, config, counters) {
   const gqlStart = Date.now();
   const jdResult = await fetchIndeedJD(cardData.jk);
 
-  const gqlResultType = !jdResult
-    ? "null"
-    : jdResult.rateLimited
+  const gqlResultType = jdResult?.error
+    ? "error"
+    : jdResult?.rateLimited
       ? "rate_limited"
-      : jdResult.phantom
+      : jdResult?.phantom
         ? "phantom"
-        : jdResult.jd
+        : jdResult?.jd
           ? "jd_ok"
           : "unknown";
 
@@ -67,30 +67,30 @@ async function processCard(anchor, config, counters) {
       jd_len: jdResult?.jd?.length || 0,
       http_status: jdResult?.http_status ?? null,
       has_indeed_key: !!document.head.getAttribute("data-jha-api-key"),
+      error: jdResult?.error ?? null,
     },
     gqlResultType === "jd_ok" ? "info" : "warn"
   );
 
-  if (jdResult && jdResult.phantom) {
-    // Phantom jk — not a real job, skip silently like a stale card
-    counters.stale_skipped++;
-    return { skipped: true };
-  }
-
-  if (!jdResult) {
+  if (jdResult?.error) {
     counters.jd_failed++;
     pushScanError(counters, {
       jk: cardData.jk,
       type: "jd_failed",
-      message: "Indeed JD fetch returned no result",
+      message: `Indeed JD: ${jdResult.error}`,
     });
     await recordSkip("indeed", cardData, "jd_failed", config.runId);
     return { skipped: true };
   }
-  if (jdResult.rateLimited) {
+  if (jdResult?.rateLimited) {
     console.warn("[JHA-Indeed] Rate limited — scan will cool down at page level");
     counters.totalRateLimited = (counters.totalRateLimited || 0) + 1;
     return { rateLimited: true };
+  }
+  if (jdResult?.phantom) {
+    // Phantom jk — not a real job, skip silently like a stale card
+    counters.stale_skipped++;
+    return { skipped: true };
   }
 
   const easyApply = detectIndeedEasyApply();
@@ -163,5 +163,6 @@ async function processCard(anchor, config, counters) {
   }
 
   await chrome.storage.local.set({ liveProgress: { ...counters } });
+
   return result || {};
 }

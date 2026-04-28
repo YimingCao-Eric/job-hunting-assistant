@@ -13,5 +13,5 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   if (!scanConfig || scanConfig.tabId !== tabId) return;
   console.log("[JHA] Scan tab closed mid-scan — clearing state");
   await chrome.storage.local.set({ scanInProgress: false, liveProgress: null });
-  await chrome.storage.local.remove(["scanConfig", "scanPageState", "debugLog"]);
+  await chrome.storage.local.remove(["scanConfig", "scanPageState", "_jhaDebugRunMeta"]);
 });

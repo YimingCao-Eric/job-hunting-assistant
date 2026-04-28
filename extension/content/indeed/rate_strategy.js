@@ -3,7 +3,7 @@
 async function _strategy6(jk, apiKey) {
   if (!apiKey) {
     console.warn("[JHA-Indeed] strategy6: no apiKey");
-    return null;
+    return { error: "no_api_key", http_status: null };
   }
 
   const controller = new AbortController();
@@ -37,7 +37,7 @@ async function _strategy6(jk, apiKey) {
   clearTimeout(timeoutId);
 
   if (res.status === 429 || res.status === 403) {
-    return { phantom: true, http_status: res.status };
+    return { rateLimited: true, http_status: res.status };
   }
   if (!res.ok) {
     console.warn("[JHA-Indeed] _strategy6: HTTP", res.status, "jk=", jk);
@@ -101,8 +101,8 @@ async function fetchIndeedJD(jk) {
   }
 
   if (!apiKey) {
-    console.warn("[JHA-Indeed] strategy6: oneGraphApiKey not found — falling back to null");
-    return null;
+    console.warn("[JHA-Indeed] fetchIndeedJD: oneGraphApiKey not found");
+    return { error: "no_api_key", http_status: null };
   }
 
   return _strategy6(jk, apiKey);

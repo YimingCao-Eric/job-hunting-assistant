@@ -212,8 +212,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | Function | Description |
 | --- | --- |
 | `getCsrfToken()` | Extracts CSRF token from `JSESSIONID` cookie for Voyager requests. |
-| `fetchCompanyName(companyUrn, csrfToken)` | Fetches company display name from Voyager entities API; wrapped in **`Promise.race` with a 3s timeout** so a hung fetch does not block the scan indefinitely. |
-| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Accepts any **non-empty** trimmed JD text. **429** → 60s pause then `null`. Omits **`voyager_raw`** from ingest payloads. |
+| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Accepts any **non-empty** trimmed JD text. Company name comes from the card DOM (`extractCardData`), not a second Voyager entities call. Omits **`voyager_raw`** from ingest payloads. |
 
 ### `content/linkedin/process.js`
 

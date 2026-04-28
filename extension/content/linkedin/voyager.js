@@ -5,42 +5,6 @@ function getCsrfToken() {
   return match ? match[1].replace(/"/g, "") : null;
 }
 
-async function fetchCompanyName(companyUrn, csrfToken) {
-  if (!companyUrn) return null;
-  const match = companyUrn.match(/:(\d+)$/);
-  if (!match) return null;
-  const companyId = match[1];
-
-  const timeout = new Promise((resolve) =>
-    setTimeout(() => resolve(null), 3000)
-  );
-  const fetchPromise = (async () => {
-    try {
-      const res = await fetch(
-        `https://www.linkedin.com/voyager/api/entities/companies/${companyId}`,
-        {
-          credentials: "include",
-          headers: {
-            "csrf-token": csrfToken,
-            Accept: "application/vnd.linkedin.normalized+json+2.1",
-            "x-restli-protocol-version": "2.0.0",
-          },
-        }
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      const miniCompany = data?.included?.find(
-        (i) => i?.$type?.includes("MiniCompany") || i?.name
-      );
-      return miniCompany?.name || miniCompany?.localizedName || null;
-    } catch {
-      return null;
-    }
-  })();
-
-  return Promise.race([fetchPromise, timeout]);
-}
-
 /**
  * Fetches JD from Voyager; up to 2 attempts with 500ms between tries.
  * Returns { jd, ... } on success, or { error, status } on failure (G3).
@@ -86,16 +50,14 @@ async function fetchJDViaVoyager(jobId) {
         data?.included?.[0]?.description?.text ||
         data?.description?.text ||
         null;
-      const trimmed = jdRaw != null ? String(jdRaw).trim() : "";
-      console.log(`[JHA] Voyager ${jobId}: jdLength=${trimmed.length}`);
+      const jdText = jdRaw != null ? String(jdRaw).trim() : "";
+      console.log(`[JHA] Voyager ${jobId}: jdLength=${jdText.length}`);
 
-      if (trimmed.length > 0) {
+      if (jdText.length > 0) {
         const apply_url =
           data?.data?.applyMethod?.companyApplyUrl ||
           data?.data?.applyMethod?.easyApplyUrl ||
           null;
-        const companyUrn = data?.data?.companyDetails?.company || null;
-        const companyName = await fetchCompanyName(companyUrn, csrfToken);
         const applyMethod = data?.data?.applyMethod;
         const easy_apply = !!(
           applyMethod?.easyApplyUrl ||
@@ -103,20 +65,20 @@ async function fetchJDViaVoyager(jobId) {
         );
 
         return {
-          jd: trimmed,
+          jd: jdText,
           apply_url,
           title: data?.data?.title || null,
           location: data?.data?.formattedLocation || null,
           listedAt:
             data?.data?.originalListedAt || data?.data?.listedAt || null,
-          company: companyName,
+          company: null,
           easy_apply,
           status: res.status,
         };
       }
 
       console.warn(
-        `[JHA-LinkedIn] fetchJDViaVoyager: short/empty JD for ${jobId} (len=${trimmed.length}) — will retry`
+        `[JHA-LinkedIn] fetchJDViaVoyager: short/empty JD for ${jobId} (len=${jdText.length}) — will retry`
       );
       if (attempt === 1) {
         await sleep(500);

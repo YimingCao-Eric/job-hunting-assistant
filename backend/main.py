@@ -10,10 +10,12 @@ from sqlalchemy import text, update
 import core.trace  # noqa: F401 — register stdlib → trace bridge handlers on startup
 from core.config import settings
 from core.database import AsyncSessionLocal, run_migrations
+from core.dedup_task_cleanup import mark_stale_dedup_tasks_failed
 from models.extension_run_log import ExtensionRunLog
 from routers import config as config_router
 from routers import dedup as dedup_router
 from routers import extension as extension_router
+from routers import run_log_ws as run_log_ws_router
 from routers import job_reports as job_reports_router
 from routers import jobs as jobs_router
 from routers import matching as matching_router
@@ -49,6 +51,12 @@ async def lifespan(_app: FastAPI):
         if result.rowcount:
             print(f"[JHA] Cleaned {result.rowcount} stale run(s) on startup")
 
+    # B-18: mark stale dedup_tasks failed — safer branch (no auto-rerun). See
+    # core.dedup_task_cleanup.mark_stale_dedup_tasks_failed.
+    n_orphan = await mark_stale_dedup_tasks_failed()
+    if n_orphan:
+        print(f"[JHA] Marked {n_orphan} orphaned dedup task(s) failed on startup")
+
     yield
 
 
@@ -77,6 +85,7 @@ app.include_router(job_reports_router.router)
 app.include_router(jobs_router.router)
 app.include_router(config_router.router)
 app.include_router(extension_router.router)
+app.include_router(run_log_ws_router.router)
 app.include_router(dedup_router.router)
 
 

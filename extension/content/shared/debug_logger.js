@@ -1,4 +1,4 @@
-/* ── Debug event emitter (batched flush to backend) ──────────────────── */
+/* ── Debug event emitter (in-memory buffer; SW flushes to backend) ─────── */
 
 const JHA_DEBUG_CREDENTIAL_KEY_RE =
   /token|auth|bearer|csrf|api.?key|cookie|password|secret/i;
@@ -25,25 +25,26 @@ function jhaRedact(obj, depth = 0) {
   return out;
 }
 
+const _buffer = [];
+
 const JhaDebug = {
-  _scanStart: null,
+  _inited: false,
+  _runId: null,
+  _scanStartMs: 0,
   _currentPage: null,
+  _lastFlushAtMs: 0,
 
   async init(runId, scanStartMs) {
-    const { debugLog } = await chrome.storage.local.get("debugLog");
-    if (debugLog && debugLog.runId === runId) {
-      this._scanStart = debugLog.scanStartMs || Date.now();
+    if (this._inited && this._runId === runId) {
       return;
     }
-    const start = scanStartMs || Date.now();
-    this._scanStart = start;
+    this._inited = true;
+    this._runId = runId;
+    this._scanStartMs = scanStartMs || Date.now();
+    this._lastFlushAtMs = 0;
+    _buffer.length = 0;
     await chrome.storage.local.set({
-      debugLog: {
-        runId,
-        events: [],
-        lastFlushAt: Date.now(),
-        scanStartMs: start,
-      },
+      _jhaDebugRunMeta: { runId, scanStartMs: this._scanStartMs },
     });
   },
 
@@ -51,71 +52,57 @@ const JhaDebug = {
     this._currentPage = page;
   },
 
-  async emit(phase, data = {}, level = "info") {
+  emit(phase, data = {}, level = "info") {
+    if (!this._inited || !this._runId) return;
     try {
       const now = Date.now();
-      const ev = {
+      _buffer.push({
         t: now,
-        dt: this._scanStart ? now - this._scanStart : 0,
+        dt: this._scanStartMs ? now - this._scanStartMs : 0,
         page: this._currentPage,
         phase,
         level,
         data: jhaRedact(data),
-      };
-      const { debugLog } = await chrome.storage.local.get("debugLog");
-      if (!debugLog || !debugLog.runId) return;
-      debugLog.events.push(ev);
-      await chrome.storage.local.set({ debugLog });
+      });
 
-      const shouldFlush =
-        debugLog.events.length >= 100 ||
-        now - (debugLog.lastFlushAt || 0) >= 5000;
-      if (shouldFlush) {
-        await this.flush();
+      if (
+        _buffer.length >= 100 ||
+        (this._lastFlushAtMs > 0 && now - this._lastFlushAtMs > 5000)
+      ) {
+        this._flush();
+      } else if (this._lastFlushAtMs === 0) {
+        this._lastFlushAtMs = now;
       }
     } catch (e) {
       console.warn("[JHA-Debug] emit failed:", e.message);
     }
   },
 
-  async flush() {
+  async _flush() {
+    if (_buffer.length === 0) return;
+    const events = _buffer.splice(0);
+    this._lastFlushAtMs = Date.now();
+    const runId = this._runId;
     try {
-      const { debugLog } = await chrome.storage.local.get("debugLog");
-      if (!debugLog || !debugLog.runId) return;
-      if (!debugLog.events.length) return;
-
-      const eventsToSend = debugLog.events.slice();
-      const runId = debugLog.runId;
-
-      const ack = await new Promise((resolve) =>
+      await new Promise((resolve) =>
         chrome.runtime.sendMessage(
-          { type: "DEBUG_LOG_FLUSH", runId, events: eventsToSend },
+          { type: "FLUSH_DEBUG_LOG", runId, events },
           resolve
         )
       );
-
-      if (ack && ack.ok) {
-        const { debugLog: latest } = await chrome.storage.local.get("debugLog");
-        if (latest && latest.runId === runId) {
-          latest.events = latest.events.slice(eventsToSend.length);
-          latest.lastFlushAt = Date.now();
-          await chrome.storage.local.set({ debugLog: latest });
-        }
-      }
-    } catch (e) {
-      console.warn("[JHA-Debug] flush failed:", e.message);
+    } catch (_) {
+      /* lossy path — same class of loss as old storage RMW */
     }
   },
 
-  /** Flush until empty or max attempts; then clear buffer. */
   async finalize() {
     for (let i = 0; i < 6; i++) {
-      const { debugLog } = await chrome.storage.local.get("debugLog");
-      if (!debugLog?.events?.length) break;
-      await this.flush();
+      if (_buffer.length === 0) break;
+      await this._flush();
     }
-    await chrome.storage.local.remove("debugLog");
-    this._scanStart = null;
+    this._inited = false;
+    this._runId = null;
     this._currentPage = null;
+    await chrome.storage.local.remove("_jhaDebugRunMeta");
   },
 };

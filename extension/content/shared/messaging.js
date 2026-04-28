@@ -70,7 +70,12 @@ async function ingestJob(jobData) {
       }
     });
 
-    if (result !== undefined) return result;
+    // Treat backend-error responses as failures that should retry.
+    // SW sends { id: null, error: "..." } when fetch throws; we want
+    // the retry loop to see this as failure, not success.
+    if (result !== undefined && !result?.error && result?.id != null) {
+      return result;
+    }
 
     const delay = attempt * 1000;
     console.warn(
@@ -89,6 +94,8 @@ async function ingestJob(jobData) {
     "[JHA] Ingest: all attempts failed for:",
     jobData?.job_title ?? "(no title)"
   );
+  console.warn("[JHA] ingest failed after 3 retries — marking backend-down");
+  await chrome.storage.local.set({ _backendDownDuringScan: true });
   return undefined;
 }
 
@@ -145,7 +152,9 @@ async function recordSkip(website, cardData, reason, runId) {
       }
     });
 
-    if (result !== undefined) return result;
+    if (result !== undefined && !result?.error && result?.id != null) {
+      return result;
+    }
 
     await new Promise((resolve) =>
       chrome.storage.local.set({ _swRetry: attempt }, resolve)

@@ -36,7 +36,7 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
       took_ms: Date.now() - voyStart,
       http_status: voyagerResult?.status ?? null,
       error: voyagerResult?.error ?? null,
-      got_jd: !!(voyagerResult && voyagerResult.jd && !voyagerResult.error),
+      got_jd: !!(jdText && !voyagerResult?.error),
       jd_len: jdText.length,
       got_company: !!(voyagerResult && voyagerResult.company),
       got_listed_at: !!(voyagerResult && voyagerResult.listedAt),

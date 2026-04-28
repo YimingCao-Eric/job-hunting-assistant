@@ -5,6 +5,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopKeepAlive();
     startKeepAlive();
   }
+  if (message.type === "PING") {
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message.type === "MANUAL_SCAN") {
     handleManualScan();
     return false;
@@ -79,7 +83,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
-  if (message.type === "DEBUG_LOG_FLUSH") {
+  if (message.type === "DEBUG_LOG_FLUSH" || message.type === "FLUSH_DEBUG_LOG") {
     (async () => {
       const result = await handleDebugLogFlush(message.runId, message.events);
       sendResponse(result);

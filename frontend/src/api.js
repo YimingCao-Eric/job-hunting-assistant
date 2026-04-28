@@ -32,14 +32,33 @@ export const api = {
   },
 
   // Scan trigger (optional extra fields e.g. scan_all for Scan All sequence)
-  triggerScan: (website = null, extra = {}) => {
+  triggerScan: async (website = null, extra = {}) => {
     const body = { ...extra };
     if (website) body.website = website;
-    return fetch(`${BASE_URL}/extension/trigger-scan`, {
+    const r = await fetch(`${BASE_URL}/extension/trigger-scan`, {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify(body),
-    }).then(r => r.json());
+    });
+    if (r.status === 409) {
+      const payload = await r.json().catch(() => ({}));
+      const detail = payload.detail;
+      const msg =
+        detail && typeof detail === 'object' && detail.message
+          ? detail.message
+          : typeof detail === 'string'
+            ? detail
+            : 'A scan recently terminated or is still running — wait and retry.';
+      const err = new Error(msg);
+      err.status = 409;
+      err.detail = typeof detail === 'object' && detail !== null ? detail : { message: msg };
+      throw err;
+    }
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(t || `HTTP ${r.status}`);
+    }
+    return r.json();
   },
 
   // Stop scan
@@ -61,9 +80,14 @@ export const api = {
     }),
 
   // Run logs (for scan status)
-  getRunLogs: (limit = 1) =>
-    fetch(`${BASE_URL}/extension/run-log?limit=${limit}`, { headers: headers() })
-      .then(r => r.json()),
+  getRunLogs: (limit = 1, { includeDebugLog = true } = {}) => {
+    const q = includeDebugLog
+      ? `limit=${limit}`
+      : `limit=${limit}&include_debug_log=false`;
+    return fetch(`${BASE_URL}/extension/run-log?${q}`, { headers: headers() }).then(
+      (r) => r.json(),
+    );
+  },
 
   getExtensionState: () =>
     fetch(`${BASE_URL}/extension/state`, { headers: headers() }).then(r => r.json()),

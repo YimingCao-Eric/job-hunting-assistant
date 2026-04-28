@@ -30,6 +30,8 @@ async function runFullScan(config, tabId) {
 
   let mutationCount = 0;
   let mutationObserver = null;
+
+  // ===== Setup: counters, MutationObserver =====
   const cardListEl = document.querySelector(
     ".scaffold-layout__list, .jobs-search-results-list"
   );
@@ -41,9 +43,11 @@ async function runFullScan(config, tabId) {
   }
 
   try {
+    // ===== Page loop =====
     while (true) {
       JhaDebug.setPage(currentPage);
 
+      //   ----- Stop check (per page) -----
       const { stopRequested } = await chrome.storage.local.get("stopRequested");
       if (stopRequested) {
         await JhaDebug.emit("pagination_ended", {
@@ -67,6 +71,7 @@ async function runFullScan(config, tabId) {
 
       const isFirstPage = currentPage === 1;
       const waitStart = Date.now();
+      //   ----- Card discovery (waitForCards) -----
       let cards = await waitForCards(isFirstPage ? 12000 : 8000);
       await JhaDebug.emit("cards_found", {
         attempt: 1,
@@ -123,11 +128,43 @@ async function runFullScan(config, tabId) {
 
       console.log(`[JHA] Page ${currentPage}: ${cards.length} cards`);
 
+      //   ----- Per-card processing -----
+      let scrapeAborted = false;
       for (let idx = 0; idx < cards.length; idx++) {
         const card = cards[idx];
-        const { stopRequested: stopNow } =
-          await chrome.storage.local.get("stopRequested");
-        if (stopNow) {
+        const flags = await chrome.storage.local.get([
+          "_backendDownDuringScan",
+          "_watchdogTripped",
+          "stopRequested",
+        ]);
+        if (flags._backendDownDuringScan) {
+          await JhaDebug.emit(
+            "error",
+            {
+              where: "scrape_loop",
+              message: "backend_unavailable",
+              reason: "ingest_retries_exhausted",
+            },
+            "error"
+          );
+          counters.aborted_reason = "backend_unavailable";
+          scrapeAborted = true;
+          break;
+        }
+        if (flags._watchdogTripped) {
+          await JhaDebug.emit(
+            "error",
+            {
+              where: "scrape_loop",
+              message: "sw_died_detected",
+            },
+            "error"
+          );
+          counters.aborted_reason = "sw_died";
+          scrapeAborted = true;
+          break;
+        }
+        if (flags.stopRequested) {
           await JhaDebug.emit("pagination_ended", {
             type: "pagination_ended",
             page: currentPage,
@@ -157,8 +194,15 @@ async function runFullScan(config, tabId) {
         await processCard(card, config, counters, cardData);
       }
 
+      if (scrapeAborted) {
+        await emitPageEnd(counters, currentPage, true);
+        break;
+      }
+
       await emitPageEnd(counters, currentPage, false);
 
+      //   ----- Pagination =====
+      //     ----- Update extension_state -----
       await new Promise((resolve) =>
         chrome.runtime.sendMessage(
           {
@@ -182,6 +226,7 @@ async function runFullScan(config, tabId) {
         scroll_height: document.body.scrollHeight,
         viewport: window.innerHeight,
       });
+      //     ----- Scroll to bottom -----
       for (const sel of PAGINATION_CONTAINER_SELECTORS) {
         const el = document.querySelector(sel);
         if (el) {
@@ -220,6 +265,7 @@ async function runFullScan(config, tabId) {
       const urlBefore = location.href;
       const lastCardIdsBefore = getCurrentCardIdSet();
 
+      //     ----- Find and click next button -----
       await JhaDebug.emit("next_click", {
         page: currentPage,
         url_before: urlBefore,
@@ -227,6 +273,7 @@ async function runFullScan(config, tabId) {
       });
       nextBtn.click();
 
+      //     ----- Wait for SPA transition -----
       const spaStart = Date.now();
       const transitioned = await waitForSpaTransition(
         urlBefore,

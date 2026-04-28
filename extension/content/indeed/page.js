@@ -87,8 +87,39 @@ async function runSinglePage(config, state) {
 
   for (let idx = 0; idx < cards.length; idx++) {
     const anchor = cards[idx];
-    const { stopRequested } = await chrome.storage.local.get("stopRequested");
-    if (stopRequested) {
+    const flags = await chrome.storage.local.get([
+      "_backendDownDuringScan",
+      "_watchdogTripped",
+      "stopRequested",
+    ]);
+    if (flags._backendDownDuringScan) {
+      await JhaDebug.emit(
+        "error",
+        {
+          where: "scrape_loop",
+          message: "backend_unavailable",
+          reason: "ingest_retries_exhausted",
+        },
+        "error"
+      );
+      counters.aborted_reason = "backend_unavailable";
+      await emitPageEnd(counters, currentPage, true);
+      return { ...counters, pages_scanned: currentPage, done: true };
+    }
+    if (flags._watchdogTripped) {
+      await JhaDebug.emit(
+        "error",
+        {
+          where: "scrape_loop",
+          message: "sw_died_detected",
+        },
+        "error"
+      );
+      counters.aborted_reason = "sw_died";
+      await emitPageEnd(counters, currentPage, true);
+      return { ...counters, pages_scanned: currentPage, done: true };
+    }
+    if (flags.stopRequested) {
       await JhaDebug.emit("pagination_ended", {
         type: "pagination_ended",
         page: currentPage,

@@ -3,7 +3,7 @@
   "name": "Job Hunting Assistant",
   "version": "1.0.0",
   "description": "Scrapes LinkedIn job listings and sends them to your backend",
-  "permissions": ["storage", "tabs", "scripting", "activeTab", "windows"],
+  "permissions": ["storage", "tabs", "scripting", "activeTab", "windows", "alarms"],
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://ca.indeed.com/*",
@@ -21,6 +21,7 @@
         "content/shared/debug_logger.js",
         "content/shared/delays.js",
         "content/shared/messaging.js",
+        "content/shared/init_helpers.js",
         "content/linkedin/constants.js",
         "content/linkedin/scroll.js",
         "content/linkedin/dom.js",
@@ -40,6 +41,7 @@
         "content/shared/debug_logger.js",
         "content/shared/delays.js",
         "content/shared/messaging.js",
+        "content/shared/init_helpers.js",
         "content/indeed/dom.js",
         "content/indeed/rate_strategy.js",
         "content/indeed/fetch_jd.js",
@@ -57,7 +59,12 @@
         "https://glassdoor.ca/*"
       ],
       "js": [
+        "content/shared/utils.js",
         "content/shared/debug_logger.js",
+        "content/shared/delays.js",
+        "content/shared/messaging.js",
+        "content/shared/init_helpers.js",
+        "content/indeed/overlay.js",
         "content/glassdoor/parse.js",
         "content/glassdoor/fetch_jd.js",
         "content/glassdoor/process.js",

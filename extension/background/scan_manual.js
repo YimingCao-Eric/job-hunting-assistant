@@ -153,6 +153,9 @@ async function handleManualScan(options = {}) {
   });
   const tabId = win.tabs[0].id;
 
+  // FIXME: this spreads the entire config (incl. resume data, skill aliases)
+  //        into chrome.storage.local. Wasteful but harmless. Trim to a
+  //        whitelist if storage usage becomes a concern.
   await chrome.storage.local.set({
     scanInProgress: true,
     scanConfig: {
@@ -173,6 +176,7 @@ async function handleManualScan(options = {}) {
   });
 
   startKeepAlive();
+  startActivePolling();
 
   const SCAN_TIMEOUT_MS = 90 * 60 * 1000;
   const scanTimeoutId = setTimeout(async () => {
@@ -180,6 +184,7 @@ async function handleManualScan(options = {}) {
     if (!scanInProgress) return;
     console.warn("[JHA] Scan safety timeout (90min) — force-completing");
     const { scanConfig } = await chrome.storage.local.get("scanConfig");
+    const tabIdToClose = scanConfig?.tabId;
     if (scanConfig?.runId) {
       await fetch(`${backendUrl}/extension/run-log/${scanConfig.runId}`, {
         method: "PUT",
@@ -198,10 +203,18 @@ async function handleManualScan(options = {}) {
       liveProgress: null,
     });
     await chrome.storage.local.remove(["scanConfig", "scanPageState"]);
+    if (tabIdToClose != null) {
+      try {
+        await chrome.tabs.remove(tabIdToClose);
+      } catch {
+        /* tab may already be gone */
+      }
+    }
     stopKeepAlive();
+    stopActivePolling();
   }, SCAN_TIMEOUT_MS);
 
   await chrome.storage.local.set({
-    scanTimeoutId: scanTimeoutId.toString(),
+    scanTimeoutId,
   });
 }

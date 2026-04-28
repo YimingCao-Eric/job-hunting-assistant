@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { useScanGrace } from '../hooks/useScanGrace'
 import { api } from '../api'
 import { detectWebsiteFromRunLog } from '../utils/runLog'
 import PageTitle from '../components/PageTitle'
@@ -112,9 +113,12 @@ export default function JobsPage() {
   const [, progressTick] = useState(0)
   const scanningTimeoutRef = useRef(null)
   const wasRunningRef = useRef(false)
-  const scanTriggerGraceRef = useRef(0)
+  const grace = useScanGrace()
   const prevScanningRef = useRef(false)
   const scanAllStartRef = useRef(null)
+  const [wsConnected, setWsConnected] = useState(false)
+
+  const pollIntervalMs = wsConnected ? 10000 : 2000
 
   const currentRunLog =
     lastRun?.status === 'running' ? lastRun : null
@@ -195,6 +199,56 @@ export default function JobsPage() {
   }, [])
 
   useEffect(() => {
+    const base = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    let wsUrl
+    try {
+      const u = new URL(base)
+      u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
+      u.pathname = '/ws/run-log'
+      u.search = ''
+      u.hash = ''
+      wsUrl = u.toString()
+    } catch {
+      wsUrl = 'ws://localhost:8000/ws/run-log'
+    }
+    const token = import.meta.env.VITE_AUTH_TOKEN || 'dev-token'
+
+    let cancelled = false
+    let ws = null
+
+    function connect() {
+      if (cancelled) return
+      ws = new WebSocket(wsUrl, ['bearer', token])
+      ws.onopen = () => setWsConnected(true)
+      ws.onclose = () => {
+        setWsConnected(false)
+        if (!cancelled) {
+          setTimeout(connect, 5000)
+        }
+      }
+      ws.onmessage = (e) => {
+        try {
+          const update = JSON.parse(e.data)
+          setLastRun((prev) => {
+            if (prev && String(prev.id) === String(update.id)) {
+              return { ...prev, ...update }
+            }
+            return prev
+          })
+        } catch (err) {
+          console.warn('WS parse error:', err)
+        }
+      }
+    }
+
+    connect()
+    return () => {
+      cancelled = true
+      if (ws) ws.close()
+    }
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
       setJobsLoading(true)
@@ -219,8 +273,6 @@ export default function JobsPage() {
 
   useEffect(() => {
     let cancelled = false
-    const GRACE_MS = 15000
-
     const tick = async () => {
       if (cancelled) return
       try {
@@ -239,11 +291,11 @@ export default function JobsPage() {
           clearTimeout(scanningTimeoutRef.current)
           scanningTimeoutRef.current = null
           if (run?.status === 'running') {
-            scanTriggerGraceRef.current = 0
+            grace.clear()
           }
           setScanning(true)
         } else {
-          const inGrace = Date.now() - scanTriggerGraceRef.current < GRACE_MS
+          const inGrace = grace.isInGrace()
           if (!inGrace) {
             setScanning(prev => {
               if (!prev) return prev
@@ -271,13 +323,13 @@ export default function JobsPage() {
     }
 
     tick()
-    const id = setInterval(tick, 2000)
+    const id = setInterval(tick, pollIntervalMs)
     return () => {
       cancelled = true
       clearInterval(id)
       clearTimeout(scanningTimeoutRef.current)
     }
-  }, [fetchJobsList, refreshTabCounts, scanAllActive])
+  }, [fetchJobsList, refreshTabCounts, scanAllActive, grace.isInGrace, grace.clear, pollIntervalMs])
 
   useEffect(() => {
     if (!scanning && !scanAllActive) return undefined
@@ -312,39 +364,52 @@ export default function JobsPage() {
 
   async function handleScanLinkedIn() {
     try {
-      scanTriggerGraceRef.current = Date.now()
+      grace.start()
       setScanning(true)
       await api.triggerScan('linkedin')
-    } catch {
+    } catch (e) {
       setScanning(false)
-      scanTriggerGraceRef.current = 0
+      grace.clear()
+      if (e?.status === 409) {
+        window.alert(e.message || 'Scan rejected — please wait and retry.')
+        return
+      }
     }
   }
 
   async function handleScanIndeed() {
     try {
-      scanTriggerGraceRef.current = Date.now()
+      grace.start()
       setScanning(true)
       await api.triggerScan('indeed')
-    } catch {
+    } catch (e) {
       setScanning(false)
-      scanTriggerGraceRef.current = 0
+      grace.clear()
+      if (e?.status === 409) {
+        window.alert(e.message || 'Scan rejected — please wait and retry.')
+        return
+      }
     }
   }
 
   async function handleScanGlassdoor() {
     try {
-      scanTriggerGraceRef.current = Date.now()
+      grace.start()
       setScanning(true)
       await api.triggerScan('glassdoor')
-    } catch {
+    } catch (e) {
       setScanning(false)
-      scanTriggerGraceRef.current = 0
+      grace.clear()
+      if (e?.status === 409) {
+        window.alert(e.message || 'Scan rejected — please wait and retry.')
+        return
+      }
     }
   }
 
   const handleScanAll = async () => {
     if (scanning || scanAllActive) return
+    grace.start()
     setScanAllActive(true)
     scanAllStartRef.current = Date.now()
     try {
@@ -368,23 +433,42 @@ export default function JobsPage() {
         const website = SCAN_WEBSITES[i]
         setCurrentScanWebsite(website)
         setScanAllWebsiteIdx(i)
-        await api.triggerScan(website, {
-          scan_all: true,
-          scan_all_position: i + 1,
-          scan_all_total: scanAllTotal,
-        })
+        try {
+          await api.triggerScan(website, {
+            scan_all: true,
+            scan_all_position: i + 1,
+            scan_all_total: scanAllTotal,
+          })
+        } catch (e) {
+          if (e?.status === 409) {
+            grace.clear()
+            window.alert(e.message || 'Scan rejected — please wait and retry.')
+            break
+          }
+          throw e
+        }
         await new Promise((r) => setTimeout(r, 3000))
         const deadline = Date.now() + 30 * 60 * 1000
+        let foundCompletion = false
         while (Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 5000))
           try {
-            const runs = await api.getRunLogs(5)
+            const runs = await api.getRunLogs(5, { includeDebugLog: false })
             if (!Array.isArray(runs)) continue
             const latest = runs.find((r) => r.search_filters?.website === website)
-            if (latest?.status === 'completed' || latest?.status === 'failed') break
+            if (latest?.status === 'completed' || latest?.status === 'failed') {
+              foundCompletion = true
+              break
+            }
           } catch {
             /* ignore poll errors */
           }
+        }
+        if (!foundCompletion) {
+          window.alert(
+            `Scan All: ${website} exceeded 30 minutes without completing — stopping scan and continuing.`,
+          )
+          await api.stopScan().catch(() => {})
         }
         await new Promise((r) => setTimeout(r, 2000))
       }
@@ -401,7 +485,7 @@ export default function JobsPage() {
   const handleStop = async () => {
     try {
       await api.stopScan()
-      scanTriggerGraceRef.current = 0
+      grace.clear()
       setTimeout(() => {
         checkRunLog().catch(() => {})
       }, 1500)
