@@ -24,13 +24,14 @@ backend/
 │   ├── config.py        Pydantic settings (env: DATABASE_URL, CONFIG_PATH, **`debug_log_ring_size`**, …)
 │   ├── database.py      Async engine, AsyncSessionLocal, get_db, migration runner
 │   ├── trace.py         Context-scoped pipeline **`debug_log`** buffer, **`JhaTrace.emit`**, stdlib log bridge, LLM trace helper
+│   ├── dedup_task_cleanup.py  Startup: mark stale **`dedup_tasks`** rows failed
 │   ├── config_file.py   read/write config.json
 │   └── auth.py          Bearer token check
 ├── dedup/
 │   └── service.py       run_dedup, Pass 0/1/2, hash + cosine, _resolve_chains, DB chain repair helper
 ├── matching/            pipeline.py (Button stages), extractor, gates, scorer, skill alias JSON + persist
 ├── profile/             resume PDF extract, parser, profile service
-├── models/              SQLAlchemy models (scraped jobs, job reports, match reports, skill candidates, extension state, …)
+├── models/              SQLAlchemy models (scraped jobs, job reports, match reports, skill candidates, extension state, **`dedup_tasks`**, …)
 ├── schemas/             Pydantic request/response models (incl. `debug_log` append payload)
 ├── routers/
 │   ├── jobs.py          POST /jobs/ingest, GET/PUT /jobs (list + detail include `has_report` for pending issue reports), skipped, dedup triggers
@@ -39,7 +40,8 @@ backend/
 │   ├── profile.py       GET/PUT /profile, upload/parse resume, extracted block
 │   ├── skills.py        Skill candidate review + refresh aliases
 │   ├── config.py        GET/PUT /config
-│   ├── extension.py      State, scan/stop triggers, run logs, session errors, sync-dedup on run complete
+│   ├── extension.py      State, scan/stop triggers, run logs, session errors, sync-dedup on run complete, **`broadcast_run_log_update`**
+│   ├── run_log_ws.py    **`WebSocket /ws/run-log`** — fan-out run-log updates (`bearer` subprotocol auth)
 │   └── dedup.py         GET dedup reports; POST /dedup/reports/{id}/debug; POST /jobs/dedup, /reset, /resolve-chains
 ├── alembic/             Migration scripts
 ├── alembic.ini
@@ -190,6 +192,12 @@ User-facing diagnostics for bad extraction or scoring. Persisted in **`job_repor
 | `GET` | `/config` | Read merged search config from JSON file |
 | `PUT` | `/config` | Partial update (unset fields preserved). Includes **`dedup_mode`**: `"manual"` \| `"sync"`. |
 
+### WebSocket (`/ws/run-log`)
+
+| Protocol | Path | Purpose |
+| --- | --- | --- |
+| `WebSocket` | `/ws/run-log` | Connect with **subprotocols** **`["bearer", "<token>"]`** (same token as **`Authorization`** on REST). Server accepts and pushes JSON run-log payloads (same shape as **`GET /extension/run-log`** items, **`debug_log`** omitted) when **`update_run_log`** broadcasts after **`PUT /extension/run-log/{id}`**. |
+
 ### Extension (`/extension`)
 
 | Method | Path | Purpose |
@@ -200,7 +208,7 @@ User-facing diagnostics for bad extraction or scoring. Persisted in **`job_repor
 | `POST` | `/extension/trigger-stop` | Request stop; marks running run logs failed |
 | `GET` | `/extension/pending-stop` | Consume pending stop |
 | `POST` | `/extension/run-log/start` | Start a run log; body may include **`scan_all`** fields |
-| `PUT` | `/extension/run-log/{log_id}` | Update run log. On transition to **`status: completed`**, if **`dedup_mode == sync`**, schedules **`run_dedup`** via **`asyncio.create_task`** (new DB session; not tied to request cancellation): single-site always; Scan All only when **`scan_all_position == scan_all_total`**. |
+| `PUT` | `/extension/run-log/{log_id}` | Update run log; **`broadcast_run_log_update`** notifies **`/ws/run-log`** clients. On transition to **`status: completed`**, if **`dedup_mode == sync`**, schedules **`run_dedup`** via **`asyncio.create_task`** (new DB session): creates a **`dedup_tasks`** row (heartbeat while running); single-site always; Scan All only when **`scan_all_position == scan_all_total`**. |
 | `POST` | `/extension/run-log/{log_id}/debug` | Append **`DebugLogAppend.events`** to the run’s **`debug_log`** JSONB (ring buffer size **`settings.debug_log_ring_size`**, default **10k**). Extension content scripts batch-flush via the service worker. |
 | `GET` | `/extension/run-log` | List run logs (each item may include **`debug_log`**) |
 | `POST` | `/extension/session-error` | Attach session error to the latest running log |
@@ -227,7 +235,7 @@ python smoke_test.py
 
 - **Scan debug trace:** `extension_run_logs.debug_log` is optional JSONB (`{ "events": [ … ] }`). The extension appends via **`POST /extension/run-log/{id}/debug`**; ring size is **`settings.debug_log_ring_size`** (default **10,000**), shared with dedup/match report append endpoints.
 - **Pipeline debug trace:** `dedup_reports.debug_log` and `match_reports.debug_log` use the same `{ "events": [ … ] }` shape. Populated by **`core.trace`** during **`run_dedup`** and matching **`run_*`** pipelines (flush at end of run; optional crash stub row + flush on failure).
-- **Startup:** Stale `extension_run_logs` rows stuck in `running` for more than 2 hours are marked `failed` on API boot.
+- **Startup:** Stale `extension_run_logs` rows stuck in `running` for more than 2 hours are marked `failed` on API boot; stale **`dedup_tasks`** in **`running`** are marked **`failed`** (**`dedup_task_cleanup`**).
 - **Sync dedup:** After a completed scan, **`run_dedup`** is scheduled with **`asyncio.create_task`** (see **`routers/extension.py`**); the task opens **`AsyncSessionLocal`** and calls **`run_dedup(..., scan_run_id=log_id, trigger="post_scan")`**. Do not reuse the request `db` session in the task.
 - **Matching (`POST /jobs/match`):** **`asyncio.create_task`** + module **`_BACKGROUND_TASKS`** map (mode label per task); **`GET /match/status`** exposes whether a run is still active. The worker uses **`AsyncSessionLocal`** and **`matching.pipeline`** (`run_cpu_work`, `run_llm_extraction_gates`, `run_cpu_score_pipeline`, `run_llm_score_pipeline`, or legacy Step B in the router). Prevents HTTP timeouts on large job sets; **`GET /match/reports`** reflects completion.
 - **Pass 2 / chains:** Cosine compares surviving jobs to a corpus of **`skip_reason IS NULL`** rows (excluding hash-flagged ids and pass survivors from the “extra” pool). Jobs flagged by cosine in an earlier batch are excluded as similarity “originals” for later batches. After Pass 2, **`_resolve_chains`** flattens any remaining **`dedup_original_job_id`** pointers before bulk UPDATE. **`POST /jobs/dedup/resolve-chains`** fixes historic DB rows if pointers still chain through removed jobs.

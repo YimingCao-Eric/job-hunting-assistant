@@ -16,6 +16,7 @@ extension/
 ├── background/
 │   ├── background.js                Service worker entry — importScripts() loads modules below
 │   ├── keepalive.js                 Periodic no-op to reduce MV3 worker suspension
+│   ├── progress_mirror.js           Debounced PUT of **`liveProgress`** counters → **`PUT /extension/run-log/{id}`** (so the web UI/WebSocket sees mid-scan progress)
 │   ├── settings.js                  Cached backendUrl / authToken from storage
 │   ├── config_fetch.js              GET /config and f_TPR computation from run logs
 │   ├── search_urls.js               LinkedIn, Indeed & Glassdoor job search URL builders
@@ -33,7 +34,8 @@ extension/
 │   │   ├── utils.js                 sleep()
 │   │   ├── debug_logger.js          JhaDebug — emit / batch flush scan trace events
 │   │   ├── delays.js                SCAN_DELAYS (scroll pacing; used by linkedin/scroll.js)
-│   │   └── messaging.js             ingestJob() + recordSkip() → INGEST_JOB
+│   │   ├── messaging.js             ingestJob() + recordSkip() → INGEST_JOB
+│   │   └── init_helpers.js          **`runScanPipeline`** — shared boot/session/overlay/scan lifecycle for site **`init.js`**
 │   ├── linkedin/
 │   │   ├── constants.js             Job card & pagination selector lists
 │   │   ├── scroll.js                scrollDelay() for virtualized list pacing (reserved)
@@ -51,7 +53,7 @@ extension/
 │   │   ├── page.js                  One page + pagination via next link
 │   │   ├── overlay.js               Corner banner using .jha-scanning-overlay
 │   │   └── init.js                  Entry: wait for scanInProgress + scanConfig (same as LinkedIn)
-│   └── glassdoor/                   Loads **`shared/debug_logger.js`** only + site scripts; load order matters
+│   └── glassdoor/                   Shared scripts + **`content/indeed/overlay.js`** (corner banner); **`init.js` last**
 │       ├── parse.js                 parseGlassdoorCard — DOM fields + jl from card/listing URL
 │       ├── fetch_jd.js              GET job-listing HTML → __NEXT_DATA__ / JSON-LD / DOM; directApply → easy_apply
 │       ├── process.js               Per-card JD + INGEST_JOB (phantom / rateLimited handling)
@@ -67,7 +69,7 @@ extension/
 
 **Manifest permissions** include **`windows`** (with **`tabs`**, **`storage`**, **`scripting`**, **`activeTab`**) so the background script can open the search URL in a **separate popup window** via `chrome.windows.create` and remove the scan tab by id on completion or force-stop.
 
-**Content scripts** listed under `manifest.json` → `content_scripts` → `js` are plain scripts: they **do not** support `import` / `export` (no ES modules). Chrome injects them **in order** into a **shared global scope** for that match pattern. **LinkedIn and Indeed** list `content/shared/*.js` first so `sleep`, **`JhaDebug`**, `SCAN_DELAYS`, `ingestJob`, and `recordSkip` exist before site scripts. **Glassdoor** loads **`debug_logger.js`** only (plus site scripts), with **`init.js` last** so `scanGlassdoorPage` / `parseGlassdoorCard` / `fetchGlassdoorJD` are defined before the entry IIFE runs.
+**Content scripts** listed under `manifest.json` → `content_scripts` → `js` are plain scripts: they **do not** support `import` / `export` (no ES modules). Chrome injects them **in order** into a **shared global scope** for that match pattern. **LinkedIn, Indeed, and Glassdoor** load **`content/shared`** in the same order: **`utils`**, **`debug_logger`**, **`delays`**, **`messaging`**, **`init_helpers`** (then site-specific scripts); Glassdoor then loads **`content/indeed/overlay.js`** before its **`glassdoor/*.js`** files. Each bundle ends with **`init.js`** (or **`init.js`'s entry**) so dependents are defined earlier.
 
 The **service worker** uses **`importScripts()`** in `background/background.js`. That API loads additional scripts into the **same global scope** as the worker (like content scripts, no ES modules here). Paths are **relative to the service worker file’s directory** (e.g. `keepalive.js` next to `background.js`). This project does **not** use `"type": "module"` for the background script.
 

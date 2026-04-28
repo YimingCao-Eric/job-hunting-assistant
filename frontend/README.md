@@ -1,6 +1,6 @@
 # Job Hunting Assistant — Frontend
 
-Single-page app for **search configuration**, **profile / resume**, **job list**, **run logs** (scan runs, dedup reports, pipeline match reports, and **issue reports**), **skill candidate review**, **matching pipeline** (dedup + extraction + gates + CPU score + optional **LLM re-score**), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth.
+Single-page app for **search configuration**, **profile / resume**, **job list**, **run logs** (scan runs, dedup reports, pipeline match reports, and **issue reports**), **skill candidate review**, **matching pipeline** (dedup + extraction + gates + CPU score + optional **LLM re-score**), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth. The **Jobs** page also opens a **WebSocket** (**`/ws/run-log`**) with the same token (see backend README) so scan progress updates without aggressive polling.
 
 For Docker-based full-stack setup, see the [repository root README](../README.md).
 
@@ -25,10 +25,12 @@ frontend/
 │   ├── main.jsx         React root
 │   ├── App.jsx          Routes + nav
 │   ├── api.js           Central fetch wrapper (VITE_API_URL, VITE_AUTH_TOKEN)
+│   ├── hooks/
+│   │   └── useScanGrace.js    Short post-scan grace before treating a run as finished
 │   ├── pages/
 │   │   ├── ConfigPage.jsx
 │   │   ├── ProfilePage.jsx     Resume upload, parsed profile, skills
-│   │   ├── JobsPage.jsx        Scans, Scan All, job grid, filters
+│   │   ├── JobsPage.jsx        Scans, Scan All, job grid, filters; **`WebSocket /ws/run-log`** + adaptive poll interval
 │   │   ├── LogsPage.jsx        Search runs (expandable **Debug trace**); Dedup / Matching run reports (same **Debug trace** when **`debug_log`** present); **Reports** (issue reports from Matching)
 │   │   ├── SkillsPage.jsx      Skill alias candidates (approve / merge / reject)
 │   │   ├── MatchingPage.jsx    Pipeline buttons (CPU / LLM extract / CPU score / LLM score), filters, job grid, **report flag** per card
@@ -51,7 +53,7 @@ frontend/
 | --- | --- |
 | `/` | Config — search config, dedup mode, LLM toggle, site filters, URL previews |
 | `/profile` | Profile — resume upload, parsed fields, skills for matching |
-| `/jobs` | Jobs — list, filters, scans (LinkedIn / Indeed / Glassdoor / **Scan All**), progress |
+| `/jobs` | Jobs — list, filters, scans (LinkedIn / Indeed / Glassdoor / **Scan All**), live run-log row via **WebSocket** (fallback: poll run logs every **2s** when disconnected, **10s** when connected) |
 | `/logs` | Logs — **Search** (run logs; **Debug trace** from `debug_log.events`), **Dedup** / **Matching** (pipeline metrics + **Debug trace** on each report card when present), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
 | `/skills` | Skills — review skill alias candidates from JD extraction |
 | `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score, optional **LLM re-score** (`llm_score`); removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**). On load, **`GET /match/status`** rehydrates the running spinner if the backend still has a pipeline task; long runs poll **`GET /match/reports`** with extended timeouts (up to **30 minutes** for LLM-heavy buttons). |

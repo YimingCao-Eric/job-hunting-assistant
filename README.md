@@ -14,13 +14,13 @@ frontend/           Vite + React, CSS modules, api.js central client (default po
   └── Routes: /, /profile, /jobs, /logs, /skills, /matching, /dedup (see frontend/README.md)
 
 backend/            FastAPI + SQLAlchemy async + PostgreSQL
-  ├── routers/          /jobs (+ job issue reports), /config, /extension, /dedup, /match/*, /profile, /skills
+  ├── routers/          /jobs (+ job issue reports), /config, /extension, /dedup, /match/*, /profile, /skills, **`/ws/run-log`** (WebSocket)
   ├── dedup/            Pass 0/1/2 pipeline (hash + cosine), chain resolution, dedup reports
   ├── matching/         CPU/LLM JD extraction, gates, CPU pre-score, optional LLM re-score; pipeline stages for /jobs/match
   ├── profile/          Resume PDF/text parsing and profile JSON for matching
   ├── models/           SQLAlchemy ORM (scraped_jobs, job_reports, match_reports, skill_candidates, …)
   ├── schemas/          Pydantic v2 request/response models
-  └── core/             Config file, database, auth, **`trace`** (in-memory pipeline debug buffer + stdlib log bridge)
+  └── core/             Config file, database, auth, **`trace`** (in-memory pipeline debug buffer + stdlib log bridge), **`dedup_task_cleanup`** (startup)
 
 docker-compose.yml  Runs backend + Postgres 16
 ```
@@ -76,7 +76,7 @@ npm install
 npm run dev
 ```
 
-Opens the app at `http://localhost:5173` — **Config** (`/`), **Profile** (`/profile`), **Jobs** (`/jobs`), **Logs** (`/logs`), **Skills** (`/skills`), **Matching** (`/matching`), **Dedup** (`/dedup`; no top-nav link — open by URL or bookmark). Use the Config page for `website`, Indeed/Glassdoor fields, dedup mode, LLM toggle, and filters (the extension popup only syncs a subset of fields). **Matching** runs dedup (optional) plus staged pipeline: CPU work, optional LLM extraction + gates, CPU pre-score, and optional **LLM re-score** (Button 4; requires **`llm`** in config and **`OPENAI_API_KEY`**). Long runs are scheduled with **`asyncio.create_task`** (not tied to the HTTP request lifecycle, so navigating away does not cancel the pipeline). The UI polls **`GET /match/reports`** for a new row and calls **`GET /match/status`** on mount to rehydrate the “running” spinner if a task is still active. **Logs → Dedup** and **Logs → Matching** can expand each run report to a **Debug trace** panel (`debug_log.events`, same shape as extension scan traces). On **Matching**, the **report flag** opens an **issue report** (extraction/scoring feedback); submitted reports are listed under **Logs → Reports** (separate from pipeline **Matching** run reports). Reports are stored in **`job_reports`** and do not modify job rows until you action them from the Reports tab.
+Opens the app at `http://localhost:5173` — **Config** (`/`), **Profile** (`/profile`), **Jobs** (`/jobs`), **Logs** (`/logs`), **Skills** (`/skills`), **Matching** (`/matching`), **Dedup** (`/dedup`; no top-nav link — open by URL or bookmark). On **Jobs**, the UI opens a **WebSocket** to **`/ws/run-log`** (same bearer token via subprotocols) so run-log rows update live; when connected, list polling backs off (see `frontend/README.md`). Use the Config page for `website`, Indeed/Glassdoor fields, dedup mode, LLM toggle, and filters (the extension popup only syncs a subset of fields). **Matching** runs dedup (optional) plus staged pipeline: CPU work, optional LLM extraction + gates, CPU pre-score, and optional **LLM re-score** (Button 4; requires **`llm`** in config and **`OPENAI_API_KEY`**). Long runs are scheduled with **`asyncio.create_task`** (not tied to the HTTP request lifecycle, so navigating away does not cancel the pipeline). The UI polls **`GET /match/reports`** for a new row and calls **`GET /match/status`** on mount to rehydrate the “running” spinner if a task is still active. **Logs → Dedup** and **Logs → Matching** can expand each run report to a **Debug trace** panel (`debug_log.events`, same shape as extension scan traces). On **Matching**, the **report flag** opens an **issue report** (extraction/scoring feedback); submitted reports are listed under **Logs → Reports** (separate from pipeline **Matching** run reports). Reports are stored in **`job_reports`** and do not modify job rows until you action them from the Reports tab.
 
 ### 7. Scan
 
@@ -133,11 +133,12 @@ Search parameters live in `config.json` (path set by `CONFIG_PATH` in Docker). E
 
 ## API Endpoints
 
-All endpoints except `/health` expect **`Authorization: Bearer <token>`** (e.g. `dev-token` locally).
+All **HTTP** JSON endpoints except `/health` expect **`Authorization: Bearer <token>`** (e.g. `dev-token` locally). **`WebSocket /ws/run-log`** uses **`Sec-WebSocket-Protocol`** subprotocols **`bearer`**, **`<token>`** instead of `Authorization`.
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Health check with DB ping (no auth) |
+| `WebSocket` | `/ws/run-log` | Run-log row fan-out (auth: subprotocols **`bearer`**, **`<token>`** — e.g. `dev-token`; same as REST). Payloads are JSON **`RunLogRead`** without **`debug_log`**. Opened by the **Jobs** page for live progress. |
 | `GET` | `/config` | Read search config |
 | `PUT` | `/config` | Merge-update search config |
 | `POST` | `/jobs/ingest` | Ingest a scraped job (URL + content-hash dedup at ingest; no per-row Pass 0/1 here) |
@@ -177,7 +178,7 @@ All endpoints except `/health` expect **`Authorization: Bearer <token>`** (e.g. 
 | `GET` | `/extension/state` | Extension state row |
 | `PUT` | `/extension/state` | Update extension state |
 | `POST` | `/extension/run-log/start` | Start a scan run (body may include `scan_all`, `scan_all_position`, `scan_all_total`) |
-| `PUT` | `/extension/run-log/{id}` | Complete or fail a run. When status becomes **`completed`** and **`dedup_mode`** is **`sync`**, the backend may enqueue **dedup** (own session, after response). |
+| `PUT` | `/extension/run-log/{id}` | Merge-update counters/status; broadcasts to **`/ws/run-log`** clients. When status becomes **`completed`** and **`dedup_mode`** is **`sync`**, the backend may enqueue **dedup** (background task + **`dedup_tasks`** row; not cancelled when the client disconnects). |
 | `POST` | `/extension/run-log/{id}/debug` | Append scan **debug trace** events (JSON body `events[]`). Ring-buffered (**`debug_log_ring_size`** in settings, default **10k**); used by the extension’s batched flushes and shared with dedup/match report traces. |
 | `GET` | `/extension/run-log` | List runs; **`?limit=N`** for recent runs |
 | `POST` | `/extension/trigger-scan` | Sets scan requested. Body may include `website`, and for Scan All: `scan_all`, `scan_all_position`, `scan_all_total`. Stored until consumed by **`GET /extension/pending-scan`**. |
@@ -197,7 +198,8 @@ Includes run metadata, counters, `search_filters`, **`scan_all`**, **`scan_all_p
 ## Database notes
 
 - **`extension_state`**: includes `scan_requested`, `stop_requested`, `scan_website`, and pending **Scan All** fields (`scan_all`, `scan_all_position`, `scan_all_total`) cleared when **`GET /pending-scan`** consumes a request.
-- **`extension_run_logs`**: stores per-run **`scan_all`** metadata so the backend knows whether to run **sync dedup** only on the last leg of Scan All; optional **`debug_log`** (JSONB) holds a ring-buffered event stream for scan troubleshooting (**`POST /extension/run-log/{id}/debug`**).
+- **`dedup_tasks`**: one row per **post-scan sync dedup** background run (ties to **`extension_run_logs.id`** via **`scan_run_id`**); **`last_heartbeat_at`** updated while running. Orphan **`running`** rows are marked **failed** on API startup (**`dedup_task_cleanup`**).
+- **`extension_run_logs`**: stores per-run **`scan_all`** metadata so the backend knows whether to run **sync dedup** only on the last leg of Scan All; optional **`debug_log`** (JSONB) holds a ring-buffered event stream for scan troubleshooting (**`POST /extension/run-log/{id}/debug`**). Updates are broadcast to **`/ws/run-log`** subscribers when the extension PUTs completion or mirrored progress (**`broadcast_run_log_update`**).
 - **`scraped_jobs`**: `original_job_id` for ingest-time content duplicate; **`dedup_original_job_id`** for dedup “kept” row when removed as duplicate; optional **`dedup_similarity_score`** for cosine matches. Pass 2 resolves in-memory chains before writing; cosine skips jobs already flagged in the same run as similarity “originals.”
 - **`dedup_reports`**: persisted metrics per manual or post-scan dedup run; optional **`debug_log`** JSONB (`{ "events": [ … ] }`) flushed at end of **`run_dedup`**.
 - **`match_reports`**: pipeline run metrics; optional **`debug_log`** JSONB flushed at end of each matching **`run_*`** stage.
