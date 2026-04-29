@@ -29,9 +29,13 @@ router = APIRouter(prefix="/extension", tags=["extension"])
 logger = logging.getLogger(__name__)
 
 # Fire-and-forget background tasks for post-scan dedup.
-# Same rationale as in routers/matching.py: asyncio.create_task is not
-# tied to the request lifecycle, so client disconnects don't cancel it.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _run_log_search_placeholder(value: str | None) -> str:
+    if value is None or not str(value).strip():
+        return "(setup pending)"
+    return str(value)
 
 
 async def _run_dedup_for_scan(log_id: UUID) -> None:
@@ -409,8 +413,8 @@ async def start_run_log(
     log = ExtensionRunLog(
         status="running",
         strategy=body.strategy,
-        search_keyword=body.search_keyword,
-        search_location=body.search_location,
+        search_keyword=_run_log_search_placeholder(body.search_keyword),
+        search_location=_run_log_search_placeholder(body.search_location),
         search_filters=body.search_filters,
         scan_all=body.scan_all,
         scan_all_position=body.scan_all_position,

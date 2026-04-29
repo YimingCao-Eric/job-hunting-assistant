@@ -49,3 +49,5 @@ class ExtensionRunLog(Base):
     scan_all_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scan_all_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
     debug_log: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(Text, nullable=True)

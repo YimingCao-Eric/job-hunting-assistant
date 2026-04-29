@@ -11,20 +11,28 @@ For Docker-based full-stack setup, see the [repository root README](../README.md
 | UI | [React 18](https://react.dev/) |
 | Routing | [React Router v6](https://reactrouter.com/) |
 | Build | [Vite](https://vite.dev/) (dev server default port **5173**) |
-| Styling | CSS modules (`*.module.css`) |
+| Styling | CSS modules (`*.module.css`); **Tailwind** utilities for **Auto-scrape** dashboard (preflight off — see `tailwind.config.js`) |
+| Auto-scrape UI | TypeScript (`.tsx`) under `src/app/(dashboard)/…`, `src/components/auto-scrape/`, `src/lib/api/autoScrape.ts` |
 
 ## Layout
 
 ```
 frontend/
 ├── index.html
-├── vite.config.js       dev server: host 0.0.0.0, port 5173
+├── vite.config.js       dev server: host 0.0.0.0, port 5173; `@` → `src/`
+├── tailwind.config.js   Tailwind (preflight off; utilities for auto-scrape)
+├── postcss.config.js
+├── tsconfig.json        TypeScript path alias `@/*`
 ├── package.json
 ├── Dockerfile           dev-mode image (npm run dev)
 ├── src/
 │   ├── main.jsx         React root
-│   ├── App.jsx          Routes + nav
+│   ├── App.jsx          Routes + nav (includes **Sidebar** with Auto-scrape link)
+│   ├── app/
+│   │   └── (dashboard)/auto-scrape/page.tsx   Auto-scrape dashboard (client page)
 │   ├── api.js           Central fetch wrapper (VITE_API_URL, VITE_AUTH_TOKEN)
+│   ├── lib/api/
+│   │   └── autoScrape.ts    **`/admin/auto-scrape`** REST helpers (+ instances poll)
 │   ├── hooks/
 │   │   └── useScanGrace.js    Short post-scan grace before treating a run as finished
 │   ├── pages/
@@ -36,6 +44,8 @@ frontend/
 │   │   ├── MatchingPage.jsx    Pipeline buttons (CPU / LLM extract / CPU score / LLM score), filters, job grid, **report flag** per card
 │   │   └── DedupPage.jsx       Dedup mode, run/reset, filter pills, job grid
 │   ├── components/
+│   │   ├── layout/Sidebar.tsx     Top nav (Config, Jobs, …, **Auto-scrape**)
+│   │   ├── auto-scrape/           StatusHeader, CurrentCycle, CycleHistory, SessionHealth, ConfigEditor
 │   │   ├── PageTitle.jsx, Spinner.jsx, JobCard.jsx, JobModal.jsx, DebugTracePanel.jsx
 │   │   ├── DedupSkipBadge.jsx  Dedup skip reason + lazy fetch for dedup_original_job
 │   │   ├── MatchBadge.jsx, MatchSkipBadge.jsx  Match level / gate skip UI
@@ -57,6 +67,7 @@ frontend/
 | `/logs` | Logs — **Search** (run logs; **Debug trace** from `debug_log.events`), **Dedup** / **Matching** (pipeline metrics + **Debug trace** on each report card when present), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
 | `/skills` | Skills — review skill alias candidates from JD extraction |
 | `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score, optional **LLM re-score** (`llm_score`); removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**). On load, **`GET /match/status`** rehydrates the running spinner if the backend still has a pipeline task; long runs poll **`GET /match/reports`** with extended timeouts (up to **30 minutes** for LLM-heavy buttons). |
+| `/dashboard/auto-scrape` | **Auto-scrape** — orchestrator status, enable/pause/shutdown, session health (CAPTCHA / reset), config editor, cycle history, multi-instance warning (**polls every 5s**; uses **`src/lib/api/autoScrape.ts`**) |
 | `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters (route only; no top-nav link — use URL or bookmark) |
 
 Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/matching`** (redirects).

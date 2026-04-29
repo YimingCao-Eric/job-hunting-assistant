@@ -10,11 +10,12 @@ extension/          Chrome Extension (Manifest V3) — see extension/README.md
   ├── content/          Shared + LinkedIn + Indeed + Glassdoor content scripts
   └── popup/            Settings UI and scan control
 
-frontend/           Vite + React, CSS modules, api.js central client (default port 5173)
-  └── Routes: /, /profile, /jobs, /logs, /skills, /matching, /dedup (see frontend/README.md)
+frontend/           Vite + React (Router), CSS modules + Tailwind for auto-scrape UI; `api.js` + `src/lib/api/*` (default port 5173)
+  └── Routes: /, /profile, /jobs, /logs, /skills, /matching, /dedup, **/dashboard/auto-scrape** (see frontend/README.md)
 
-backend/            FastAPI + SQLAlchemy async + PostgreSQL
-  ├── routers/          /jobs (+ job issue reports), /config, /extension, /dedup, /match/*, /profile, /skills, **`/ws/run-log`** (WebSocket)
+backend/            FastAPI + SQLAlchemy async + PostgreSQL; optional **Redis** (post-scrape wake when `REDIS_URL` set)
+  ├── routers/          /jobs, /config, /extension, /dedup, /match/*, /profile, /skills, **/admin/auto-scrape**, /ws/run-log, …
+  ├── auto_scrape/      Post-scrape subscriber (Redis wake; APScheduler fallback)
   ├── dedup/            Pass 0/1/2 pipeline (hash + cosine), chain resolution, dedup reports
   ├── matching/         CPU/LLM JD extraction, gates, CPU pre-score, optional LLM re-score; pipeline stages for /jobs/match
   ├── profile/          Resume PDF/text parsing and profile JSON for matching
@@ -22,7 +23,7 @@ backend/            FastAPI + SQLAlchemy async + PostgreSQL
   ├── schemas/          Pydantic v2 request/response models
   └── core/             Config file, database, auth, **`trace`** (in-memory pipeline debug buffer + stdlib log bridge), **`dedup_task_cleanup`** (startup)
 
-docker-compose.yml  Runs backend + Postgres 16
+docker-compose.yml  Backend + Postgres 16 (+ **Redis** if enabled in `.env`)
 ```
 
 ## Quick Start
@@ -89,6 +90,15 @@ Click **Scan Now** in the popup (or trigger a scan from the web UI **Jobs** page
 
 **Scan All** (Jobs page) runs LinkedIn → Indeed → Glassdoor in series; each leg sends `scan_all` metadata to the backend so **sync dedup** (if enabled) runs once after the **last** site finishes, not after each leg.
 
+## Auto-scrape (extension orchestrator)
+
+The extension can run **unattended multi-site cycles** (LinkedIn, Indeed, Glassdoor × configured keywords) driven by backend state and the service worker:
+
+- **Web dashboard:** `http://localhost:5173/dashboard/auto-scrape` — Enable / Pause / Stop and Exit, test cycle, session health (probe status, **Resolve CAPTCHA** / **Reset**), orchestrator config (sites, keywords, limits), recent cycles, multi-instance warning when more than one extension heartbeats in a 5-minute window.
+- **Flow:** `POST /admin/auto-scrape/enable` (or dashboard) sets `enabled`; the SW mirrors state on **`jha_poll`** (~30s) and **self-bootstraps** the `auto_scrape_next_cycle` alarm when idle. Each cycle: pre-check (health, config, per-site **probe** with CAPTCHA URL/body heuristics), optional **Chrome notifications** for CAPTCHA sites, matrix of scans, cycle rows on the backend. **Post-scrape** dedup/matching in the pipeline may be a no-op depending on deployment; scrape completion is still recorded.
+- **Hardening:** repeated pre-check failures **auto-pause** (`enabled: false`); explicit **Enable** clears the pre-check counter. Sites with high **consecutive_failures** or **`last_probe_status === captcha`** are skipped until **reset-session** / user resolves CAPTCHA. **`GET /admin/auto-scrape/instances`** supports the dashboard multi-instance banner.
+- **Further reading:** `extension/PHASE_5_NOTES.md` (alarm bootstrap); extension `background/auto_scrape*.js`, `poll.js`; backend `routers/auto_scrape.py`.
+
 ## Smoke Tests
 
 Run the automated smoke test suite against a running backend:
@@ -130,6 +140,7 @@ Search parameters live in `config.json` (path set by `CONFIG_PATH` in Docker). E
 | `EXTENSION_ORIGIN_REGEX` | Regex to validate Chrome extension origin header |
 | `OPENAI_API_KEY` | Optional; required for LLM JD extraction, LLM scoring (Button 4), and LLM resume/profile features when `llm` is enabled (see `.env.example`) |
 | `DEBUG_LOG_RING_SIZE` | Optional; max events kept per **`debug_log`** (extension run logs, dedup reports, match reports). Default **10000** (see `core/config.py`). |
+| `REDIS_URL` | Optional; when set, backend subscribes to Redis for **post-scrape** orchestration nudges (`/admin/auto-scrape/wake-orchestrator`). Enable Redis in **docker-compose** via `.env` when you need that path |
 
 ## API Endpoints
 
@@ -187,6 +198,29 @@ All **HTTP** JSON endpoints except `/health` expect **`Authorization: Bearer <to
 | `GET` | `/extension/pending-stop` | Atomically read-and-clear stop request |
 | `POST` | `/extension/session-error` | Report session error from extension |
 
+### Auto-scrape (`/admin/auto-scrape`)
+
+Admin routes for the **extension-driven** auto-scrape orchestrator (bearer auth). Highlights:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/admin/auto-scrape/state` | Singleton row: JSON **`state`** (enabled, probes, counters, `next_cycle_at`, …) + heartbeat timestamp |
+| `PUT` | `/admin/auto-scrape/state` | **Full** JSON state replace (`{ "state": { … } }`) |
+| `POST` | `/admin/auto-scrape/enable` | Set `enabled`, clear pre-check failure counter |
+| `POST` | `/admin/auto-scrape/pause` | Set `enabled: false` |
+| `POST` | `/admin/auto-scrape/shutdown` | Request graceful exit (`exit_requested`) |
+| `POST` | `/admin/auto-scrape/test-cycle` | `test_cycle_pending` |
+| `POST` | `/admin/auto-scrape/heartbeat` | SW heartbeat; tracks instance ids for **`GET /admin/auto-scrape/instances`** |
+| `GET` | `/admin/auto-scrape/instances` | Recent extension instance ids (in-memory, ~5 min window) |
+| `GET` | `/admin/auto-scrape/cycles` | Cycle history (`?limit=`) |
+| `GET` | `/admin/auto-scrape/config` | Orchestrator config (sites, keywords, thresholds) |
+| `PUT` | `/admin/auto-scrape/config` | Update orchestrator config (validated) |
+| `GET` | `/admin/auto-scrape/sessions` | Per-site session probe / failure state |
+| `PUT` | `/admin/auto-scrape/sessions/{site}` | Update probe status (admin / extension) |
+| `POST` | `/admin/auto-scrape/reset-session/{site}` | Reset failure counters for a site |
+
+See **`routers/auto_scrape.py`** for the full list (cycle CRUD, wake-orchestrator, cleanup, etc.).
+
 ### `GET /jobs` response shape (high level)
 
 Each job includes identifiers, `website`, title, company, location, URLs, `skip_reason`, **`dedup_similarity_score`**, **`dedup_original_job_id`** (when set by dedup), `original_job_id` (ingest-time content duplicate), matching pipeline fields, **`has_report`** (pending issue report), timestamps, etc.
@@ -197,6 +231,7 @@ Includes run metadata, counters, `search_filters`, **`scan_all`**, **`scan_all_p
 
 ## Database notes
 
+- **`auto_scrape_state`**, **`auto_scrape_config`**, **`auto_scrape_cycles`**, **`site_session_states`**: orchestrator singleton state, validated config, per-cycle rows, and per-site probe / `consecutive_failures` (see Alembic migrations).
 - **`extension_state`**: includes `scan_requested`, `stop_requested`, `scan_website`, and pending **Scan All** fields (`scan_all`, `scan_all_position`, `scan_all_total`) cleared when **`GET /pending-scan`** consumes a request.
 - **`dedup_tasks`**: one row per **post-scan sync dedup** background run (ties to **`extension_run_logs.id`** via **`scan_run_id`**); **`last_heartbeat_at`** updated while running. Orphan **`running`** rows are marked **failed** on API startup (**`dedup_task_cleanup`**).
 - **`extension_run_logs`**: stores per-run **`scan_all`** metadata so the backend knows whether to run **sync dedup** only on the last leg of Scan All; optional **`debug_log`** (JSONB) holds a ring-buffered event stream for scan troubleshooting (**`POST /extension/run-log/{id}/debug`**). Updates are broadcast to **`/ws/run-log`** subscribers when the extension PUTs completion or mirrored progress (**`broadcast_run_log_update`**).

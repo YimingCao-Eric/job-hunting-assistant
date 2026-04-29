@@ -23,10 +23,10 @@ class DedupTask(Base):
         default=uuid.uuid4,
         server_default=text("gen_random_uuid()"),
     )
-    scan_run_id: Mapped[uuid.UUID] = mapped_column(
+    scan_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extension_run_logs.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="pending")
     started_at: Mapped[datetime] = mapped_column(

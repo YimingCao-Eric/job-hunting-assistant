@@ -6,6 +6,7 @@ services:
     environment:
       - CONFIG_PATH=/app/data/config.json
       - PROFILE_PATH=/app/data/profile.json
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       # Persist profile + search config on the host (survives image rebuilds).
       # Create ./data before first up, or Docker will create it (may be root-owned on Linux).
@@ -13,6 +14,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
 
   frontend:
@@ -43,6 +46,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
     restart: unless-stopped
 
 volumes:

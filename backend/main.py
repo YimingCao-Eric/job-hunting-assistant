@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -8,10 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text, update
 
 import core.trace  # noqa: F401 — register stdlib → trace bridge handlers on startup
+from auto_scrape.post_scrape_orchestrator import redis_subscriber
+from core.auto_scrape_lifecycle import cleanup_stale_cycles_at_startup
 from core.config import settings
 from core.database import AsyncSessionLocal, run_migrations
 from core.dedup_task_cleanup import mark_stale_dedup_tasks_failed
 from models.extension_run_log import ExtensionRunLog
+from routers import admin_cleanup as admin_cleanup_router
+from routers import auto_scrape as auto_scrape_router
 from routers import config as config_router
 from routers import dedup as dedup_router
 from routers import extension as extension_router
@@ -21,10 +26,13 @@ from routers import jobs as jobs_router
 from routers import matching as matching_router
 from routers import profile as profile_router
 from routers import skills as skills_router
+from scheduler import setup_scheduler, shutdown_scheduler
 
 logging.getLogger("matching").setLevel(logging.DEBUG)
 logging.getLogger("routers.matching").setLevel(logging.DEBUG)
 logging.getLogger("routers.jobs").setLevel(logging.INFO)
+logging.getLogger("scheduler").setLevel(logging.INFO)
+logging.getLogger("apscheduler").setLevel(logging.INFO)
 
 
 @asynccontextmanager
@@ -57,7 +65,30 @@ async def lifespan(_app: FastAPI):
     if n_orphan:
         print(f"[JHA] Marked {n_orphan} orphaned dedup task(s) failed on startup")
 
-    yield
+    await cleanup_stale_cycles_at_startup()
+
+    setup_scheduler()
+    redis_sub_task: asyncio.Task | None = None
+    if settings.redis_url:
+        redis_sub_task = asyncio.create_task(
+            redis_subscriber(),
+            name="post_scrape_redis_subscriber",
+        )
+
+    try:
+        yield
+    finally:
+        if redis_sub_task is not None:
+            redis_sub_task.cancel()
+            try:
+                await redis_sub_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Error during redis_subscriber shutdown"
+                )
+        shutdown_scheduler()
 
 
 app = FastAPI(title="Job Hunting Assistant API", lifespan=lifespan)
@@ -87,6 +118,8 @@ app.include_router(config_router.router)
 app.include_router(extension_router.router)
 app.include_router(run_log_ws_router.router)
 app.include_router(dedup_router.router)
+app.include_router(auto_scrape_router.router)
+app.include_router(admin_cleanup_router.router)
 
 
 @app.get("/health")

@@ -14,3 +14,5 @@ scikit-learn==1.5.2
 openai>=1.40.0
 python-dateutil>=2.9.0
 opendataloader-pdf>=2.2.0
+apscheduler==3.10.4
+redis>=5.0.0

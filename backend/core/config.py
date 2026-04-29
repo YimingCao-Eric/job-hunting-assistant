@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     database_url: str
+    redis_url: str | None = None
     config_path: str = "/app/data/config.json"
     profile_path: str = "/app/data/profile.json"
     extension_origin_regex: str = r"^chrome-extension://[a-zA-Z0-9]+$"

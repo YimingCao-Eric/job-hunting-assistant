@@ -1,14 +1,14 @@
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-from typing import Optional
 
 
 class RunLogCreate(BaseModel):
     strategy: str = "C"
-    search_keyword: str | None = None
-    search_location: str | None = None
+    search_keyword: Optional[str] = None
+    search_location: Optional[str] = None
     search_filters: dict | None = None
     scan_all: bool = False
     scan_all_position: int | None = None
@@ -27,6 +27,11 @@ class RunLogUpdate(BaseModel):
     session_error: str | None = None
     error_message: str | None = None
     errors: list | None = None
+    search_keyword: str | None = None
+    search_location: str | None = None
+    search_filters: dict | None = None
+    failure_reason: str | None = None
+    failure_category: str | None = None
 
 
 class RunLogRead(BaseModel):
@@ -55,3 +60,5 @@ class RunLogRead(BaseModel):
     scan_all_position: int | None = None
     scan_all_total: int | None = None
     debug_log: dict | None = None
+    failure_reason: str | None = None
+    failure_category: str | None = None

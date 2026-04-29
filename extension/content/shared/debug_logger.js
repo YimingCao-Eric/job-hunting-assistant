@@ -27,6 +27,11 @@ function jhaRedact(obj, depth = 0) {
 
 const _buffer = [];
 
+/** D-14: warn once per scan when client buffer is trimmed */
+let _jhaDebugCappedWarningEmitted = false;
+
+const MAX_DEBUG_EVENTS = 5000;
+
 const JhaDebug = {
   _inited: false,
   _runId: null,
@@ -42,6 +47,7 @@ const JhaDebug = {
     this._runId = runId;
     this._scanStartMs = scanStartMs || Date.now();
     this._lastFlushAtMs = 0;
+    _jhaDebugCappedWarningEmitted = false;
     _buffer.length = 0;
     await chrome.storage.local.set({
       _jhaDebugRunMeta: { runId, scanStartMs: this._scanStartMs },
@@ -64,6 +70,17 @@ const JhaDebug = {
         level,
         data: jhaRedact(data),
       });
+
+      if (_buffer.length > MAX_DEBUG_EVENTS) {
+        const dropped = _buffer.length - MAX_DEBUG_EVENTS;
+        _buffer.splice(0, dropped);
+        if (!_jhaDebugCappedWarningEmitted) {
+          console.warn(
+            `[JhaDebug] Buffer capped at ${MAX_DEBUG_EVENTS} events; ${dropped} oldest discarded`
+          );
+          _jhaDebugCappedWarningEmitted = true;
+        }
+      }
 
       if (
         _buffer.length >= 100 ||

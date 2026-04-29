@@ -3,15 +3,19 @@
   "name": "Job Hunting Assistant",
   "version": "1.0.0",
   "description": "Scrapes LinkedIn job listings and sends them to your backend",
-  "permissions": ["storage", "tabs", "scripting", "activeTab", "windows", "alarms"],
+  "permissions": ["storage", "tabs", "scripting", "activeTab", "windows", "alarms", "notifications"],
   "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "https://*.linkedin.com/*",
+    "https://*.indeed.com/*",
+    "https://*.glassdoor.com/*",
+    "https://*.glassdoor.ca/*",
     "https://www.linkedin.com/*",
     "https://ca.indeed.com/*",
     "https://apis.indeed.com/*",
     "https://www.glassdoor.ca/*",
-    "https://glassdoor.ca/*",
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*"
+    "https://glassdoor.ca/*"
   ],
   "content_scripts": [
     {

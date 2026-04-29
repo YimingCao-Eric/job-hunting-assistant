@@ -7,11 +7,14 @@ importScripts(
   "debug_flush.js",
   "config_fetch.js",
   "search_urls.js",
+  "auto_scrape_config.js",
   "poll.js",
   "scan_manual.js",
   "ingest.js",
   "runtime_messages.js",
   "scan_completion.js",
   "tabs_safety.js",
-  "startup.js"
+  "startup.js",
+  "auto_scrape.js",
+  "auto_scrape_init.js"
 );

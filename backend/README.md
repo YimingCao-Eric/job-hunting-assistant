@@ -19,8 +19,10 @@ For full-stack setup (Docker, extension, web UI), see the [repository root READM
 
 ```
 backend/
-├── main.py              FastAPI app, CORS, /health, router includes
+├── main.py              FastAPI app, CORS, /health, lifespan (migrations, Redis subscriber, auto-scrape cycle cleanup, scheduler)
 ├── core/
+│   ├── auto_scrape_lifecycle.py  Startup: mark stale auto-scrape cycles failed
+│   ├── auto_scrape_validation.py  Orchestrator config limits + validate()
 │   ├── config.py        Pydantic settings (env: DATABASE_URL, CONFIG_PATH, **`debug_log_ring_size`**, …)
 │   ├── database.py      Async engine, AsyncSessionLocal, get_db, migration runner
 │   ├── trace.py         Context-scoped pipeline **`debug_log`** buffer, **`JhaTrace.emit`**, stdlib log bridge, LLM trace helper
@@ -41,9 +43,10 @@ backend/
 │   ├── skills.py        Skill candidate review + refresh aliases
 │   ├── config.py        GET/PUT /config
 │   ├── extension.py      State, scan/stop triggers, run logs, session errors, sync-dedup on run complete, **`broadcast_run_log_update`**
+│   ├── auto_scrape.py   **`/admin/auto-scrape`** — state, config, cycles, sessions, enable/pause/shutdown, heartbeat, instances, wake-orchestrator, …
 │   ├── run_log_ws.py    **`WebSocket /ws/run-log`** — fan-out run-log updates (`bearer` subprotocol auth)
 │   └── dedup.py         GET dedup reports; POST /dedup/reports/{id}/debug; POST /jobs/dedup, /reset, /resolve-chains
-├── alembic/             Migration scripts
+├── auto_scrape/         **`post_scrape_orchestrator`** — optional Redis subscriber + post-scrape cycle claims (extension also uses **APScheduler** in `main.py` when configured)
 ├── alembic.ini
 ├── requirements.txt
 ├── Dockerfile
@@ -60,6 +63,8 @@ Variables are read from a `.env` file (see [`.env.example`](../.env.example) at 
 | `CONFIG_PATH` | Path to `config.json` (default `/app/config.json` in Docker) |
 | `EXTENSION_ORIGIN_REGEX` | Optional; reserved for stricter extension-origin checks |
 | `OPENAI_API_KEY` | Optional; required when running LLM extraction/gates or **`llm_score`** if `llm` is enabled (see repo root `.env.example`) |
+| `REDIS_URL` | Optional; when set, enables the post-scrape **`wake-orchestrator`** subscriber (`auto_scrape/post_scrape_orchestrator.py`). Compose can run a Redis service when configured in `.env` |
+| `DEBUG_LOG_RING_SIZE` | Optional; max events per run **`debug_log`** ring buffer (default **10000**; see `core/config.py`) |
 
 When using **Docker Compose** from the repo root, `DATABASE_URL` typically points at the `postgres` service hostname.
 
@@ -197,6 +202,29 @@ User-facing diagnostics for bad extraction or scoring. Persisted in **`job_repor
 | Protocol | Path | Purpose |
 | --- | --- | --- |
 | `WebSocket` | `/ws/run-log` | Connect with **subprotocols** **`["bearer", "<token>"]`** (same token as **`Authorization`** on REST). Server accepts and pushes JSON run-log payloads (same shape as **`GET /extension/run-log`** items, **`debug_log`** omitted) when **`update_run_log`** broadcasts after **`PUT /extension/run-log/{id}`**. |
+
+### Auto-scrape (`/admin/auto-scrape`)
+
+Bearer-authenticated **admin** API for the Chrome extension **auto-scrape orchestrator**: singleton **`auto_scrape_state`** (JSON `state`: enabled, probe counters, `next_cycle_at`, …), **`auto_scrape_config`** (sites, keywords, thresholds), **`auto_scrape_cycles`** rows, and **`site_session_states`** (per-site `last_probe_status`, `consecutive_failures`).
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` / `PUT` | `/admin/auto-scrape/state` | Read / **full replace** state document |
+| `GET` / `PUT` | `/admin/auto-scrape/config` | Orchestrator config; `PUT` returns warnings when over soft scan limits |
+| `GET` | `/admin/auto-scrape/config/limits` | Field limits + derived caps (`max_keywords`, scans/cycle) |
+| `POST` | `/admin/auto-scrape/config/reset` | Reset orchestrator config to defaults |
+| `POST` | `/admin/auto-scrape/enable` / `pause` / `shutdown` / `test-cycle` | Control flags (`shutdown` sets `exit_requested` for graceful SW exit) |
+| `POST` | `/admin/auto-scrape/heartbeat` | Updates `last_sw_heartbeat_at`; optional body `extension_instance_id`; in-memory **`/instances`** tracker |
+| `GET` | `/admin/auto-scrape/instances` | Instance ids seen via heartbeat in the last ~5 minutes (process-local) |
+| `GET` | `/admin/auto-scrape/cycles` | List cycles (`limit` query) |
+| `POST` | `/admin/auto-scrape/cycle` | Create cycle row (extension) |
+| `PUT` | `/admin/auto-scrape/cycle/{id}` | Update cycle (extension) |
+| `GET` | `/admin/auto-scrape/sessions` | List **`site_session_states`** |
+| `PUT` | `/admin/auto-scrape/sessions/{site}` | Set `last_probe_status` |
+| `POST` | `/admin/auto-scrape/reset-session/{site}` | Reset failure counters / backoff for a site |
+| `POST` | `/admin/auto-scrape/wake-orchestrator` | Redis publish to nudge post-scrape worker (best-effort) |
+
+Implementation: **`routers/auto_scrape.py`**. Post-scrape pipeline steps may be simplified in some deployments; **`REDIS_URL`** enables the subscriber in **`auto_scrape/post_scrape_orchestrator.py`**.
 
 ### Extension (`/extension`)
 
