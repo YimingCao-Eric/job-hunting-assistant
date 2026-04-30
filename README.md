@@ -94,10 +94,11 @@ Click **Scan Now** in the popup (or trigger a scan from the web UI **Jobs** page
 
 The extension can run **unattended multi-site cycles** (LinkedIn, Indeed, Glassdoor × configured keywords) driven by backend state and the service worker:
 
-- **Web dashboard:** `http://localhost:5173/dashboard/auto-scrape` — Enable / Pause / Stop and Exit, test cycle, session health (probe status, **Resolve CAPTCHA** / **Reset**), orchestrator config (sites, keywords, limits), recent cycles, multi-instance warning when more than one extension heartbeats in a 5-minute window.
-- **Flow:** `POST /admin/auto-scrape/enable` (or dashboard) sets `enabled`; the SW mirrors state on **`jha_poll`** (~30s) and **self-bootstraps** the `auto_scrape_next_cycle` alarm when idle. Each cycle: pre-check (health, config, per-site **probe** with CAPTCHA URL/body heuristics), optional **Chrome notifications** for CAPTCHA sites, matrix of scans, cycle rows on the backend. **Post-scrape** dedup/matching in the pipeline may be a no-op depending on deployment; scrape completion is still recorded.
-- **Hardening:** repeated pre-check failures **auto-pause** (`enabled: false`); explicit **Enable** clears the pre-check counter. Sites with high **consecutive_failures** or **`last_probe_status === captcha`** are skipped until **reset-session** / user resolves CAPTCHA. **`GET /admin/auto-scrape/instances`** supports the dashboard multi-instance banner.
-- **Further reading:** `extension/PHASE_5_NOTES.md` (alarm bootstrap); extension `background/auto_scrape*.js`, `poll.js`; backend `routers/auto_scrape.py`.
+- **Web dashboard:** `http://localhost:5173/dashboard/auto-scrape` — Enable / Pause / Stop and Exit, test cycle, session health (probe status, **Resolve CAPTCHA** / **Reset**), orchestrator config (sites, keywords, limits), recent cycles, multi-instance warning when more than one extension heartbeats in a 5-minute window. **Configuration** saves to **`PUT /admin/auto-scrape/config`** (`enabled_sites`, `keywords`, limits); the SW reloads that config **at the start of each cycle** (no cross-cycle cache). If the request fails or those arrays are empty, the extension falls back to compiled-in defaults.
+- **Flow:** `POST /admin/auto-scrape/enable` (or dashboard) sets `enabled`; **`POST /enable`**, **`/pause`**, and **`/shutdown`** also clear **`config_change_pending`** so a stale abort flag cannot stick across runs. The SW mirrors state on **`jha_poll`** (~30s) and **self-bootstraps** `auto_scrape_next_cycle` only when **`state.cycle_phase`** is not **`scrape_running`** / **`postscrape_running`** and no alarm exists (avoids parallel cycles). On **`runOneCycle` entry**, the SW immediately **`PUT`**s **`cycle_phase: scrape_running`** so self-bootstrap does not fire during the pre-check window; **`finally`** (and graceful shutdown) return **`cycle_phase`** to **`idle`**. Each cycle: pre-check (health, **`GET /config`**, per-site **probe** — bare HTTP 403 without captcha markers is treated as **rate_limited**, not CAPTCHA), optional **Chrome notifications** for captcha sites, matrix of scans using orchestrator **sites × keywords**, cycle rows on the backend. **Post-scrape** dedup/matching may be a no-op depending on deployment; scrape completion is still recorded.
+- **Popup hygiene:** **Stop and Exit** (**`handleGracefulExit`**) and **SW startup** (**`auto_scrape_init.js`**) close **popup** windows whose tabs look like job-board scrapes (LinkedIn / Indeed / Glassdoor URLs) so zombie popups cannot keep scraping or attach to the wrong run logs.
+- **Hardening:** repeated pre-check failures **auto-pause** (`enabled: false`); explicit **Enable** clears the pre-check counter. Sites with high **consecutive_failures** or **`last_probe_status === captcha`** are skipped until **reset-session** / user resolves CAPTCHA. **`GET /admin/auto-scrape/instances`** supports the dashboard multi-instance banner. Backend startup can mark stale **`auto_scrape_cycles`** failed and reset **`cycle_phase`** to **`idle`** in **`auto_scrape_state`** when those rows are cleaned up.
+- **Further reading:** `extension/PHASE_5_NOTES.md` (alarm bootstrap); extension `background/auto_scrape*.js`, `poll.js`; backend `routers/auto_scrape.py`, `core/auto_scrape_lifecycle.py`.
 
 ## Smoke Tests
 
@@ -206,9 +207,9 @@ Admin routes for the **extension-driven** auto-scrape orchestrator (bearer auth)
 | --- | --- | --- |
 | `GET` | `/admin/auto-scrape/state` | Singleton row: JSON **`state`** (enabled, probes, counters, `next_cycle_at`, …) + heartbeat timestamp |
 | `PUT` | `/admin/auto-scrape/state` | **Full** JSON state replace (`{ "state": { … } }`) |
-| `POST` | `/admin/auto-scrape/enable` | Set `enabled`, clear pre-check failure counter |
-| `POST` | `/admin/auto-scrape/pause` | Set `enabled: false` |
-| `POST` | `/admin/auto-scrape/shutdown` | Request graceful exit (`exit_requested`) |
+| `POST` | `/admin/auto-scrape/enable` | Set `enabled`, clear pre-check failure counter and **`config_change_pending`** |
+| `POST` | `/admin/auto-scrape/pause` | Set `enabled: false`; clears **`config_change_pending`** |
+| `POST` | `/admin/auto-scrape/shutdown` | Request graceful exit (`exit_requested`); clears **`config_change_pending`** |
 | `POST` | `/admin/auto-scrape/test-cycle` | `test_cycle_pending` |
 | `POST` | `/admin/auto-scrape/heartbeat` | SW heartbeat; tracks instance ids for **`GET /admin/auto-scrape/instances`** |
 | `GET` | `/admin/auto-scrape/instances` | Recent extension instance ids (in-memory, ~5 min window) |

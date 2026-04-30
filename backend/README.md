@@ -21,7 +21,7 @@ For full-stack setup (Docker, extension, web UI), see the [repository root READM
 backend/
 ├── main.py              FastAPI app, CORS, /health, lifespan (migrations, Redis subscriber, auto-scrape cycle cleanup, scheduler)
 ├── core/
-│   ├── auto_scrape_lifecycle.py  Startup: mark stale auto-scrape cycles failed
+│   ├── auto_scrape_lifecycle.py  Startup: mark stale auto-scrape cycles failed; reset **`auto_scrape_state.cycle_phase`** to **`idle`** when rows are cleaned
 │   ├── auto_scrape_validation.py  Orchestrator config limits + validate()
 │   ├── config.py        Pydantic settings (env: DATABASE_URL, CONFIG_PATH, **`debug_log_ring_size`**, …)
 │   ├── database.py      Async engine, AsyncSessionLocal, get_db, migration runner
@@ -205,7 +205,7 @@ User-facing diagnostics for bad extraction or scoring. Persisted in **`job_repor
 
 ### Auto-scrape (`/admin/auto-scrape`)
 
-Bearer-authenticated **admin** API for the Chrome extension **auto-scrape orchestrator**: singleton **`auto_scrape_state`** (JSON `state`: enabled, probe counters, `next_cycle_at`, …), **`auto_scrape_config`** (sites, keywords, thresholds), **`auto_scrape_cycles`** rows, and **`site_session_states`** (per-site `last_probe_status`, `consecutive_failures`).
+Bearer-authenticated **admin** API for the Chrome extension **auto-scrape orchestrator**: singleton **`auto_scrape_state`** (JSON `state`: `enabled`, **`cycle_phase`** (`idle` \| `scrape_running` \| `postscrape_running`), probes, counters, `next_cycle_at`, **`config_change_pending`**, …), **`auto_scrape_config`** (`enabled_sites`, `keywords`, intervals, thresholds — consumed by the SW each cycle), **`auto_scrape_cycles`** rows, and **`site_session_states`** (per-site `last_probe_status`, `consecutive_failures`).
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -213,7 +213,7 @@ Bearer-authenticated **admin** API for the Chrome extension **auto-scrape orches
 | `GET` / `PUT` | `/admin/auto-scrape/config` | Orchestrator config; `PUT` returns warnings when over soft scan limits |
 | `GET` | `/admin/auto-scrape/config/limits` | Field limits + derived caps (`max_keywords`, scans/cycle) |
 | `POST` | `/admin/auto-scrape/config/reset` | Reset orchestrator config to defaults |
-| `POST` | `/admin/auto-scrape/enable` / `pause` / `shutdown` / `test-cycle` | Control flags (`shutdown` sets `exit_requested` for graceful SW exit) |
+| `POST` | `/admin/auto-scrape/enable` / `pause` / `shutdown` / `test-cycle` | Control flags; **`enable`**, **`pause`**, and **`shutdown`** clear **`config_change_pending`**; **`shutdown`** sets `exit_requested` for graceful SW exit |
 | `POST` | `/admin/auto-scrape/heartbeat` | Updates `last_sw_heartbeat_at`; optional body `extension_instance_id`; in-memory **`/instances`** tracker |
 | `GET` | `/admin/auto-scrape/instances` | Instance ids seen via heartbeat in the last ~5 minutes (process-local) |
 | `GET` | `/admin/auto-scrape/cycles` | List cycles (`limit` query) |

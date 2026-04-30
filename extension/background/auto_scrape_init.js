@@ -18,6 +18,8 @@ async function initAutoScrape() {
 
   await chrome.storage.local.set({ _autoScrape: state });
 
+  await _cleanupOrphanScrapePopups();
+
   if (isNewInstance) {
     try {
       const { backendUrl, authToken } = await getSettings();
@@ -39,6 +41,28 @@ chrome.runtime.onStartup.addListener(initAutoScrape);
 chrome.runtime.onInstalled.addListener(initAutoScrape);
 
 self.initAutoScrape = initAutoScrape;
+
+async function _cleanupOrphanScrapePopups() {
+  try {
+    const stored = await chrome.storage.local.get("_autoScrape");
+    const cycle_phase = stored._autoScrape?.cycle_phase || "idle";
+    if (
+      cycle_phase === "scrape_running" ||
+      cycle_phase === "postscrape_running"
+    ) {
+      return;
+    }
+    if (typeof self._closeScrapePopupWindows !== "function") return;
+    const closed = await self._closeScrapePopupWindows();
+    if (closed > 0) {
+      console.log(
+        `[auto_scrape_init] closed ${closed} orphan scrape popup window(s)`
+      );
+    }
+  } catch (e) {
+    console.warn("[auto_scrape_init] orphan popup cleanup failed:", e.message);
+  }
+}
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "auto_scrape_next_cycle") {

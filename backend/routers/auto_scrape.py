@@ -384,6 +384,7 @@ async def enable(
     st["enabled"] = True
     # Phase 7: explicit reset so re-enable after auto-pause clears precheck counter
     st["consecutive_precheck_failures"] = 0
+    st["config_change_pending"] = False
     row.state = st
     flag_modified(row, "state")
     await db.flush()
@@ -397,7 +398,7 @@ async def pause(
     _user: dict = Depends(get_current_user),
 ):
     row = await _load_state_row(db)
-    st = {**row.state, "enabled": False}
+    st = {**row.state, "enabled": False, "config_change_pending": False}
     row.state = st
     flag_modified(row, "state")
     await db.flush()
@@ -411,7 +412,7 @@ async def shutdown(
     _user: dict = Depends(get_current_user),
 ):
     row = await _load_state_row(db)
-    st = {**row.state, "exit_requested": True}
+    st = {**row.state, "exit_requested": True, "config_change_pending": False}
     row.state = st
     flag_modified(row, "state")
     await db.flush()

@@ -58,6 +58,36 @@ async function _fetchOrchestratorConfig() {
   return row.config || {};
 }
 
+const _SCRAPE_POPUP_URL_RE = /linkedin\.com|indeed\.com|glassdoor\./;
+
+function _popupWindowLooksLikeJobBoardScrape(w) {
+  if (w.type !== "popup") return false;
+  return (w.tabs || []).some(
+    (t) => t.url && _SCRAPE_POPUP_URL_RE.test(t.url)
+  );
+}
+
+/** Close job-board popup windows opened for scraping. Returns how many were closed. */
+async function _closeScrapePopupWindows() {
+  let closed = 0;
+  try {
+    const windows = await chrome.windows.getAll({ populate: true });
+    for (const w of windows) {
+      if (!_popupWindowLooksLikeJobBoardScrape(w)) continue;
+      try {
+        await chrome.windows.remove(w.id);
+        closed++;
+        _asLog(`closed scrape popup window ${w.id}`);
+      } catch (e) {
+        _asWarn(`failed to close popup window ${w.id}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    _asWarn(`scrape popup cleanup failed: ${e.message}`);
+  }
+  return closed;
+}
+
 async function _waitForScanIdle(maxWaitMs = 60_000) {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
@@ -157,8 +187,49 @@ async function probeSiteSession(site) {
     }
 
     if (httpStatus === 403) {
+      const captchaUrlMarkers403 = [
+        "/checkpoint/challenge",
+        "/uas/login",
+        "/account/login-challenge",
+        "/member/captcha.htm",
+        "/cdn-cgi/challenge",
+      ];
+      if (captchaUrlMarkers403.some((m) => urlLower.includes(m))) {
+        return {
+          status: "captcha",
+          reason: "url_marker_403",
+          httpStatus,
+          finalUrl,
+        };
+      }
+
+      try {
+        const bodyText = await resp.clone().text();
+        const bodySnippet = bodyText.slice(0, 8192).toLowerCase();
+        const captchaBodyMarkers403 = [
+          "cf-challenge-running",
+          "g-recaptcha",
+          "recaptcha-anchor",
+          "are you a human",
+          "verify you're human",
+          "verify you are human",
+          "please complete the security check",
+          "security verification",
+        ];
+        if (captchaBodyMarkers403.some((m) => bodySnippet.includes(m))) {
+          return {
+            status: "captcha",
+            reason: "body_marker_403",
+            httpStatus,
+            finalUrl,
+          };
+        }
+      } catch {
+        /* body read failed; fall through */
+      }
+
       return {
-        status: "captcha",
+        status: "rate_limited",
         reason: "http_403",
         httpStatus,
         finalUrl,
@@ -652,28 +723,36 @@ async function runOneCycle(opts = {}) {
   const isTestCycle = opts.isTestCycle === true;
   _asLog(`runOneCycle started (testCycle=${isTestCycle})`);
 
-  const storedInit = await chrome.storage.local.get("_autoScrape");
-  const stateInit = storedInit._autoScrape || {};
-  if (!stateInit.instance_id) {
-    throw new Error("no instance_id; initAutoScrape did not run");
-  }
-
-  await chrome.storage.local.set({ stopRequested: false });
-  await chrome.storage.local.remove([
-    "_backendDownDuringScan",
-    "_watchdogTripped",
-    "_autoScrape_exit_requested",
-    "_autoScrape_config_change_pending",
-  ]);
-  _asLog("cleared stale abort flags");
-
-  if (isTestCycle) {
-    await chrome.storage.local.set({
-      _autoScrape: { ...stateInit, test_cycle_pending: true },
-    });
+  let committedCyclePhase = false;
+  try {
+    await _asPutStateMerged({ cycle_phase: "scrape_running" });
+    committedCyclePhase = true;
+  } catch (e) {
+    _asWarn(`failed to set cycle_phase=scrape_running: ${e.message}`);
   }
 
   try {
+    const storedInit = await chrome.storage.local.get("_autoScrape");
+    const stateInit = storedInit._autoScrape || {};
+    if (!stateInit.instance_id) {
+      throw new Error("no instance_id; initAutoScrape did not run");
+    }
+
+    await chrome.storage.local.set({ stopRequested: false });
+    await chrome.storage.local.remove([
+      "_backendDownDuringScan",
+      "_watchdogTripped",
+      "_autoScrape_exit_requested",
+      "_autoScrape_config_change_pending",
+    ]);
+    _asLog("cleared stale abort flags");
+
+    if (isTestCycle) {
+      await chrome.storage.local.set({
+        _autoScrape: { ...stateInit, test_cycle_pending: true },
+      });
+    }
+
     _asLog("pre-cycle check...");
     const preCheck = await preCycleCheck();
     const precheckStatus = preCheck.reason;
@@ -867,10 +946,61 @@ async function runOneCycle(opts = {}) {
       };
     }
 
-    const keywords = AS_DEFAULT_KEYWORDS;
+    let configSites = AS_DEFAULT_SITES;
+    let configKeywords = AS_DEFAULT_KEYWORDS;
+    try {
+      const cfg = await _fetchOrchestratorConfig();
+      if (cfg && typeof cfg === "object") {
+        if (Array.isArray(cfg.enabled_sites) && cfg.enabled_sites.length > 0) {
+          configSites = cfg.enabled_sites;
+        }
+        if (Array.isArray(cfg.keywords) && cfg.keywords.length > 0) {
+          configKeywords = cfg.keywords;
+        }
+        _asLog(
+          `config loaded: sites=${configSites.length}, keywords=${configKeywords.length}`
+        );
+      }
+    } catch (e) {
+      _asWarn(
+        `failed to load config from backend; using defaults: ${e.message}`
+      );
+    }
+
+    const matrixSites = eligibleSites.filter((site) =>
+      configSites.includes(site)
+    );
+    if (matrixSites.length === 0) {
+      _asWarn(
+        "no matrix sites: enabled_sites from config does not overlap " +
+          "with live eligible sites"
+      );
+      try {
+        await _updateCycle(cycleRow.id, {
+          status: "failed",
+          error_message:
+            "No sites to scan: enabled_sites does not overlap with live session list",
+          completed_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        _asWarn(`failed to update no-matrix-sites cycle row: ${e.message}`);
+      }
+      return {
+        ok: false,
+        cycle_id: cycleRow.cycle_id,
+        cycle_row_id: cycleRow.id,
+        results: {
+          scans_attempted: 0,
+          scans_succeeded: 0,
+          scans_failed: 0,
+          failures_by_reason: {},
+        },
+      };
+    }
+
     const cycleResults = await runScrapeMatrix(
-      eligibleSites,
-      keywords,
+      matrixSites,
+      configKeywords,
       cycleRow.id
     );
 
@@ -905,6 +1035,13 @@ async function runOneCycle(opts = {}) {
       results: cycleResults,
     };
   } finally {
+    if (committedCyclePhase) {
+      try {
+        await _asPutStateMerged({ cycle_phase: "idle" });
+      } catch (e) {
+        _asWarn(`failed to reset cycle_phase=idle: ${e.message}`);
+      }
+    }
     const sFin = await chrome.storage.local.get("_autoScrape");
     const stFin = { ...(sFin._autoScrape || {}) };
     stFin.test_cycle_pending = false;
@@ -922,6 +1059,8 @@ async function handleGracefulExit() {
     try {
       _asLog("graceful exit started");
 
+      await _closeScrapePopupWindows();
+
       await chrome.storage.local.set({ _backendDownDuringScan: true });
 
       await _asSleep(5000);
@@ -938,6 +1077,7 @@ async function handleGracefulExit() {
           exit_requested: false,
           test_cycle_pending: false,
           next_cycle_at: 0,
+          cycle_phase: "idle",
         });
       } catch (e) {
         _asWarn("graceful exit: state update failed:", e.message);
@@ -947,6 +1087,7 @@ async function handleGracefulExit() {
         "_autoScrape_exit_requested",
         "_autoScrape_config_change_pending",
         "_backendDownDuringScan",
+        "scanInProgress",
       ]);
 
       const stored = await chrome.storage.local.get("_autoScrape");
@@ -1087,3 +1228,4 @@ self.onAutoScrapeAlarm = onAutoScrapeAlarm;
 self.preCycleCheck = preCycleCheck;
 self.probeSiteSession = probeSiteSession;
 self._notifyCaptcha = _notifyCaptcha;
+self._closeScrapePopupWindows = _closeScrapePopupWindows;

@@ -45,10 +45,11 @@ async function pollAutoScrapeState() {
       state.exit_requested !== true;
 
     if (shouldBootstrap) {
-      const scanStored = await chrome.storage.local.get("scanInProgress");
-      const scanInProgress = scanStored.scanInProgress === true;
+      const phase = state.cycle_phase;
+      const cycleActive =
+        phase === "scrape_running" || phase === "postscrape_running";
 
-      if (!scanInProgress) {
+      if (!cycleActive) {
         const existing = await chrome.alarms.get("auto_scrape_next_cycle");
         if (!existing) {
           await chrome.alarms.create("auto_scrape_next_cycle", {

@@ -99,8 +99,8 @@ export function ConfigEditor({
   const phase = String(state.state.cycle_phase || "").toLowerCase();
   const isRunning =
     state.state.enabled === true ||
-    phase === "scraping" ||
-    phase === "postscrape";
+    phase === "scrape_running" ||
+    phase === "postscrape_running";
 
   return (
     <div className="bg-white border rounded-lg p-6 shadow-sm">

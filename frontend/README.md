@@ -67,7 +67,7 @@ frontend/
 | `/logs` | Logs — **Search** (run logs; **Debug trace** from `debug_log.events`), **Dedup** / **Matching** (pipeline metrics + **Debug trace** on each report card when present), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
 | `/skills` | Skills — review skill alias candidates from JD extraction |
 | `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score, optional **LLM re-score** (`llm_score`); removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**). On load, **`GET /match/status`** rehydrates the running spinner if the backend still has a pipeline task; long runs poll **`GET /match/reports`** with extended timeouts (up to **30 minutes** for LLM-heavy buttons). |
-| `/dashboard/auto-scrape` | **Auto-scrape** — orchestrator status, enable/pause/shutdown, session health (CAPTCHA / reset), config editor, cycle history, multi-instance warning (**polls every 5s**; uses **`src/lib/api/autoScrape.ts`**) |
+| `/dashboard/auto-scrape` | **Auto-scrape** — orchestrator status, enable/pause/shutdown, session health (CAPTCHA / reset), **Configuration** (**`PUT /admin/auto-scrape/config`** with **`enabled_sites`** and **`keywords`**; extension reads fresh config each cycle), cycle history, multi-instance warning (**polls every 5s**; uses **`src/lib/api/autoScrape.ts`**) |
 | `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters (route only; no top-nav link — use URL or bookmark) |
 
 Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/matching`** (redirects).
@@ -147,6 +147,10 @@ The `api` object exports methods (all requests use the shared `Authorization` he
 ## Scan All (Jobs page)
 
 **Scan All** loops `linkedin` → `indeed` → `glassdoor` and calls **`triggerScan(website, { scan_all: true, scan_all_position, scan_all_total })`** so the backend can run **sync dedup** only after the **last** site completes. Single-site buttons call **`triggerScan('linkedin')`** (etc.) with no extra payload.
+
+## Auto-scrape dashboard (`/dashboard/auto-scrape`)
+
+Uses **`src/lib/api/autoScrape.ts`**: state, cycles, sessions, instances poll, **`saveConfig`** → **`PUT /admin/auto-scrape/config`** with **`enabled_sites`**, **`keywords`**, and other orchestrator fields validated by the backend. The Chrome extension reads that row via **`GET /admin/auto-scrape/config`** at **each cycle start** (not cached across cycles). **`POST /enable`** (from the dashboard) applies after save when the user starts the orchestrator.
 
 ## Dedup chain repair (optional)
 

@@ -6,13 +6,12 @@
 const AS_DEFAULT_SITES = ["linkedin", "indeed", "glassdoor"];
 const AS_DEFAULT_KEYWORDS = [
   "software engineer",
-  "AI engineer",
   "machine learning engineer",
 ];
 
 const AS_PROBE_URLS = {
   linkedin: "https://www.linkedin.com/feed/",
-  indeed: "https://ca.indeed.com/notifications",
+  indeed: "https://www.indeed.com/notifications",
   glassdoor: "https://www.glassdoor.ca/Job/index.htm",
 };
 
