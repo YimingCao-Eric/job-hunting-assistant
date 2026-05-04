@@ -4,9 +4,9 @@
  * Other extensions (e.g. Adobe Acrobat) may wrap window.fetch on the page and
  * corrupt API responses. INGEST_JOB is handled in the service worker only.
  *
- * LinkedIn/Indeed: INGEST_JOB uses correlationId + immediate ack + INGEST_JOB_RESULT
- * via tabs.sendMessage so slow backend fetch does not hit the sendMessage channel timeout.
- * Glassdoor: sends INGEST_JOB without correlationId (legacy async sendResponse path).
+ * LinkedIn / Indeed / Glassdoor: INGEST_JOB uses correlationId + immediate ack +
+ * INGEST_JOB_RESULT via tabs.sendMessage so slow backend fetch does not hit the
+ * sendMessage channel timeout.
  */
 
 const _ingestResultWaiters = new Map();

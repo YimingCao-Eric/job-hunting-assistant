@@ -46,7 +46,10 @@ async function processCard(anchor, config, counters) {
   }
 
   const gqlStart = Date.now();
-  const jdResult = await fetchIndeedJD(cardData.jk);
+  const [mosaicJob, jdResult] = await Promise.all([
+    getIndeedMosaicJobForJk(cardData.jk),
+    fetchIndeedJD(cardData.jk),
+  ]);
 
   const gqlResultType = jdResult?.error
     ? "error"
@@ -96,6 +99,17 @@ async function processCard(anchor, config, counters) {
   const easyApply = detectIndeedEasyApply();
   const applyUrl = easyApply ? null : cardData.job_url;
 
+  const mosaicPayload = mosaicJob ?? null;
+  let graphqlPayload = null;
+  const gj = jdResult.graphql_job;
+  if (gj && typeof gj === "object" && Object.keys(gj).length > 0) {
+    graphqlPayload = gj;
+  }
+  const source_raw =
+    mosaicPayload || graphqlPayload
+      ? { mosaic: mosaicPayload, graphql: graphqlPayload }
+      : undefined;
+
   const ingStart = Date.now();
   const result = await ingestJob({
     website: "indeed",
@@ -113,6 +127,7 @@ async function processCard(anchor, config, counters) {
       indeed_remotejob: config.indeed_remotejob,
     },
     scan_run_id: config.runId,
+    ...(source_raw ? { source_raw } : {}),
   });
 
   const resultType = !result

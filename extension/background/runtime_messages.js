@@ -246,6 +246,77 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+  if (message.type === "GET_INDEED_MOSAIC_JOB_MAP") {
+    (async () => {
+      try {
+        const tabId = sender.tab?.id;
+        if (!tabId) {
+          sendResponse({ jobsByJk: {} });
+          return;
+        }
+
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          func: () => {
+            const jobsByJk = {};
+
+            function mergeJob(obj) {
+              if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+              const jk = obj.jobkey ?? obj.jobKey;
+              if (
+                typeof jk !== "string" ||
+                jk.length < 8 ||
+                jk.length > 32 ||
+                !/^[a-zA-Z0-9]+$/.test(jk)
+              ) {
+                return;
+              }
+              const prev = jobsByJk[jk];
+              const n = Object.keys(obj).length;
+              if (!prev || n > Object.keys(prev).length) jobsByJk[jk] = obj;
+            }
+
+            function walk(node, depth) {
+              if (depth > 14 || node == null) return;
+              if (Array.isArray(node)) {
+                for (let i = 0; i < node.length; i++) walk(node[i], depth + 1);
+                return;
+              }
+              if (typeof node !== "object") return;
+              mergeJob(node);
+              const keys = Object.keys(node);
+              for (let i = 0; i < keys.length; i++) walk(node[keys[i]], depth + 1);
+            }
+
+            const pd = window?.mosaic?.providerData;
+            if (pd && typeof pd === "object") {
+              const providerKeys = [
+                "mosaic-provider-jobcards",
+                "mosaic-provider-serp",
+                "mosaic-provider-jobsearch",
+              ];
+              for (let i = 0; i < providerKeys.length; i++) {
+                const block = pd[providerKeys[i]];
+                if (block != null) walk(block, 0);
+              }
+            }
+
+            return jobsByJk;
+          },
+        });
+
+        const raw = results?.[0]?.result;
+        sendResponse({
+          jobsByJk: raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {},
+        });
+      } catch (e) {
+        console.error("[JHA] GET_INDEED_MOSAIC_JOB_MAP error:", e.message);
+        sendResponse({ jobsByJk: {} });
+      }
+    })();
+    return true;
+  }
   if (message.type === "GET_MAIN_WORLD_VALUE") {
     (async () => {
       try {

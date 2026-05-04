@@ -88,6 +88,7 @@ async function processGlassdoorCard(cardEl, config, counters) {
       location: config.glassdoor?.location || "Canada",
     },
     scan_run_id:     config.runId || null,
+    ...(jdResult.source_raw ? { source_raw: jdResult.source_raw } : {}),
   };
 
   const ingStart = Date.now();

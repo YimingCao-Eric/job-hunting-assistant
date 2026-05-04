@@ -84,7 +84,9 @@ async function _strategy6(jk, apiKey) {
 
   if (!jd || !String(jd).trim())
     return { phantom: true, http_status: res.status };
-  return { jd, http_status: res.status };
+
+  // Unwrapped job node for source_raw.graphql (not the full GraphQL envelope).
+  return { jd, http_status: res.status, graphql_job: job };
 }
 
 async function fetchIndeedJD(jk) {

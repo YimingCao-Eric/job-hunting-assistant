@@ -19,8 +19,10 @@ async function fetchJDViaVoyager(jobId) {
   let lastStatus = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
+      const decorationId =
+        "com.linkedin.voyager.deco.jobs.web.shared.WebFullJobPosting-65";
       const res = await fetch(
-        `https://www.linkedin.com/voyager/api/jobs/jobPostings/${jobId}`,
+        `https://www.linkedin.com/voyager/api/jobs/jobPostings/${jobId}?decorationId=${encodeURIComponent(decorationId)}`,
         {
           credentials: "include",
           headers: {
@@ -44,36 +46,50 @@ async function fetchJDViaVoyager(jobId) {
         }
         return { error: `http_${res.status}`, status: res.status };
       }
-      const data = await res.json();
+      const json = await res.json();
       const jdRaw =
-        data?.data?.description?.text ||
-        data?.included?.[0]?.description?.text ||
-        data?.description?.text ||
+        json?.data?.description?.text ||
+        json?.included?.[0]?.description?.text ||
+        json?.description?.text ||
         null;
       const jdText = jdRaw != null ? String(jdRaw).trim() : "";
       console.log(`[JHA] Voyager ${jobId}: jdLength=${jdText.length}`);
 
       if (jdText.length > 0) {
         const apply_url =
-          data?.data?.applyMethod?.companyApplyUrl ||
-          data?.data?.applyMethod?.easyApplyUrl ||
+          json?.data?.applyMethod?.companyApplyUrl ||
+          json?.data?.applyMethod?.easyApplyUrl ||
           null;
-        const applyMethod = data?.data?.applyMethod;
+        const applyMethod = json?.data?.applyMethod;
         const easy_apply = !!(
           applyMethod?.easyApplyUrl ||
           String(applyMethod?.$type || "").includes("EasyApply")
         );
 
+        let source_raw = null;
+        if (
+          json &&
+          json.data != null &&
+          typeof json.data === "object" &&
+          !Array.isArray(json.data)
+        ) {
+          source_raw = {
+            data: json.data,
+            included: Array.isArray(json.included) ? json.included : [],
+          };
+        }
+
         return {
           jd: jdText,
           apply_url,
-          title: data?.data?.title || null,
-          location: data?.data?.formattedLocation || null,
+          title: json?.data?.title || null,
+          location: json?.data?.formattedLocation || null,
           listedAt:
-            data?.data?.originalListedAt || data?.data?.listedAt || null,
+            json?.data?.originalListedAt || json?.data?.listedAt || null,
           company: null,
           easy_apply,
           status: res.status,
+          ...(source_raw ? { source_raw } : {}),
         };
       }
 

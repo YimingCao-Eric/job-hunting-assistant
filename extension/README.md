@@ -52,6 +52,7 @@ extension/
 │   │   └── init.js                  Entry: wait for scanConfig, run scan, write scanComplete
 │   ├── indeed/
 │   │   ├── dom.js                   Session, card anchors, waitForCards, extractCardData
+│   │   ├── mosaic_map.js            **`GET_INDEED_MOSAIC_JOB_MAP`** → MAIN-world **`window.mosaic.providerData`** walk; cached **`jobkey` → mosaic_job** map per page
 │   │   ├── rate_strategy.js         fetchIndeedJD — Indeed GraphQL JD fetch (see fetch_jd.js)
 │   │   ├── fetch_jd.js              Comment stub — `fetchIndeedJD` lives in `rate_strategy.js` (load order: strategy before process)
 │   │   ├── process.js               Per-card JD fetch + ingest
@@ -60,7 +61,7 @@ extension/
 │   │   └── init.js                  Entry: wait for scanInProgress + scanConfig (same as LinkedIn)
 │   └── glassdoor/                   Shared scripts + **`content/indeed/overlay.js`** (corner banner); **`init.js` last**
 │       ├── parse.js                 parseGlassdoorCard — DOM fields + jl from card/listing URL
-│       ├── fetch_jd.js              GET job-listing HTML → __NEXT_DATA__ / JSON-LD / DOM; directApply → easy_apply
+│       ├── fetch_jd.js              GET job-listing HTML → __NEXT_DATA__ (path 1) or **?jl= + JSON-LD** (path 2) / DOM; directApply → easy_apply
 │       ├── process.js               Per-card JD + INGEST_JOB (phantom / rateLimited handling)
 │       ├── page.js                  scanGlassdoorPage — cards loop, early stop, rate-limit cooldown
 │       └── init.js                  Manual: scanInProgress + scanConfig.website===glassdoor → scan + scanComplete; else optional debounced auto-scan (GET_CONFIG, SCAN_STARTED, SCAN_COMPLETE)
@@ -136,7 +137,7 @@ The **service worker** uses **`importScripts()`** in `background/background.js`.
 
 | Function | Description |
 | --- | --- |
-| *(listener)* | On **every** message, **`stopKeepAlive()` + `startKeepAlive()`** to reset the keepalive timer while the SW handles work. Dispatches `MANUAL_SCAN`, `INGEST_JOB`, **`DEBUG_LOG_FLUSH`** (batched debug events → **`debug_flush.js`**), `GET_TAB_ID`, `GET_EXTENSION_STATE`, `PUT_EXTENSION_STATE`, `STOP_SCAN`, `TRIGGER_STOP`, `NAVIGATE_SCAN_TAB`, `SESSION_ERROR`, **`GET_CONFIG`** (GET `/config` for Glassdoor content scripts), **`CHECK_STOP`**, **`SCAN_STARTED`** (POST run-log for auto Glassdoor), **`SCAN_COMPLETE`** (PUT run-log for auto Glassdoor), **`GET_MAIN_WORLD_VALUE`** (Indeed API key in main world) to the appropriate handlers. |
+| *(listener)* | On **every** message, **`stopKeepAlive()` + `startKeepAlive()`** to reset the keepalive timer while the SW handles work. Dispatches `MANUAL_SCAN`, `INGEST_JOB`, **`DEBUG_LOG_FLUSH`** (batched debug events → **`debug_flush.js`**), `GET_TAB_ID`, `GET_EXTENSION_STATE`, `PUT_EXTENSION_STATE`, `STOP_SCAN`, `TRIGGER_STOP`, `NAVIGATE_SCAN_TAB`, `SESSION_ERROR`, **`GET_CONFIG`** (GET `/config` for Glassdoor content scripts), **`CHECK_STOP`**, **`SCAN_STARTED`** (POST run-log for auto Glassdoor), **`SCAN_COMPLETE`** (PUT run-log for auto Glassdoor), **`GET_MAIN_WORLD_VALUE`** (Indeed API key in main world), **`GET_INDEED_MOSAIC_JOB_MAP`** (Indeed SERP mosaic_job snapshot by **`jobkey`**) to the appropriate handlers. |
 
 ### `background/scan_completion.js`
 
@@ -219,7 +220,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | Function | Description |
 | --- | --- |
 | `getCsrfToken()` | Extracts CSRF token from `JSESSIONID` cookie for Voyager requests. |
-| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Accepts any **non-empty** trimmed JD text. Company name comes from the card DOM (`extractCardData`), not a second Voyager entities call. Omits **`voyager_raw`** from ingest payloads. |
+| `fetchJDViaVoyager(jobId)` | Direct **`fetch()`** to Voyager job postings API. Up to **2** attempts, **500ms** apart. Accepts any **non-empty** trimmed JD text. Company name comes from the card DOM (`extractCardData`), not a second Voyager entities call. On success, attaches **`source_raw: { data, included }`** (top-level Voyager keys only) to the ingest payload when `data` is a valid object — backend writes **`linkedin_jobs`**; omitted if `data` is missing/invalid (legacy fallback). |
 
 ### `content/linkedin/process.js`
 
@@ -247,6 +248,13 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | --- | --- |
 | `init()` | Waits for `scanInProgress` / `scanConfig`, validates session, runs `runSinglePage`. **`scanConfig` is not cleared when merely advancing pages** — it stays in storage until the run ends so the next page load still has config. It is removed only when `summary.done` (success path) or in the **catch** path (error). The **90-minute** stuck-scan guard lives in **`handleManualScan()`** (service worker timeout), not in `init()`. |
 
+### `content/indeed/mosaic_map.js`
+
+| Function | Description |
+| --- | --- |
+| `loadIndeedMosaicJobMap()` | Sends **`GET_INDEED_MOSAIC_JOB_MAP`** once per page load (cached promise); returns **`jobkey` → mosaic_job** object map from the background **MAIN**-world scraper. |
+| `getIndeedMosaicJobForJk(jk)` | Returns the per-card **`mosaic_job`** object for **`jk`**, or **`null`**. |
+
 ### `content/indeed/dom.js`
 
 | Function | Description |
@@ -260,7 +268,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `fetchIndeedJD(jk)` | Indeed JD extraction via **`apis.indeed.com/graphql`** with a **10s `AbortController`** timeout. **`oneGraphApiKey`** is read from the page via **`GET_MAIN_WORLD_VALUE`**. Returns `{ jd }` when text is non-empty after trim, `{ rateLimited: true }`, `{ phantom: true }` (timeout / HTTP / GraphQL / empty job), or `null` if no API key. |
+| `fetchIndeedJD(jk)` | Indeed JD extraction via **`apis.indeed.com/graphql`** with a **10s `AbortController`** timeout. **`oneGraphApiKey`** is read from the page via **`GET_MAIN_WORLD_VALUE`**. Returns **`{ jd, graphql_job }`** when text is non-empty after trim (**`graphql_job`** is **`data.jobData.results[0].job`** — the unwrapped job node for **`source_raw.graphql`**), **`{ rateLimited: true }`**, **`{ phantom: true }`** (timeout / HTTP / GraphQL / empty job), or **`{ error: "no_api_key" }`** if no API key. |
 
 ### `content/indeed/fetch_jd.js`
 
@@ -274,7 +282,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | --- | --- |
 | `pushScanError(counters, entry)` | Same cap (**200**) as LinkedIn/Glassdoor for run-log **`errors`**. |
 | `parseIndeedPostDate(snippets)` | Derives ISO **`post_datetime`** from card snippet lines (e.g. “30 days ago”, “just posted”) when parseable; else `null`. |
-| `processCard(anchor, config, counters)` | Validates `jk`, fetches JD. **`easy_apply`** is determined only by **`detectIndeedEasyApply()`** (sync DOM on the job view: Indeed apply widget / buttons — no async **`executeScript`** from this file). **`apply_url`** is **`null`** when easy apply, else the viewjob URL. Calls `ingestJob` with Indeed fields (including **`post_datetime`** from **`parseIndeedPostDate`**), updates counters. |
+| `processCard(anchor, config, counters)` | Validates `jk`, loads **`mosaic_job`** via **`getIndeedMosaicJobForJk`** (parallel with **`fetchIndeedJD`**). **`easy_apply`** is determined only by **`detectIndeedEasyApply()`** (sync DOM on the job view: Indeed apply widget / buttons — no async **`executeScript`** from this file). **`apply_url`** is **`null`** when easy apply, else the viewjob URL. Adds **`source_raw: { mosaic, graphql }`** when at least one side is present (**`graphql`** from **`graphql_job`**); omits **`source_raw`** if both would be null (legacy ingest). Calls **`ingestJob`** with Indeed fields (including **`post_datetime`** from **`parseIndeedPostDate`**), updates counters. |
 
 ### `content/indeed/page.js`
 
@@ -306,14 +314,14 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 
 | Function | Description |
 | --- | --- |
-| `fetchGlassdoorJD(jobUrl, jl)` | **GET** the job-listing **`jobUrl`** (`credentials: include`, **20s** abort). Parses JD from **`__NEXT_DATA__`**, JSON-LD, or DOM. Reads JSON-LD **`JobPosting.directApply`** for **`easy_apply`**. **429/503** → **`{ rateLimited: true, easy_apply: false }`**; phantom → **`{ phantom: true }`**; success → **`{ jd, easy_apply }`**. |
+| `fetchGlassdoorJD(jobUrl, jl)` | **GET** the job-listing **`jobUrl`** (`credentials: include`, **8s** abort). **Path 1:** **`__NEXT_DATA__.props.pageProps.jobListing`** when embedded — JD fallbacks and **`source_raw`** when **`jobDetailsData.listingId`** exists. **Path 2 (RSC pages):** no **`__NEXT_DATA__`** — **`source_raw`** may still attach when the fetched URL has **`?jl=`** (numeric listing id) and a **`JobPosting`** JSON-LD script is present (**`buildGlassdoorSourceRaw`** wraps minimal **`jobListing`**). JSON-LD extraction uses **`script[type="application/ld+json"]`** (**`@type === JobPosting`**, else **`@graph`** via **`collectJobPostingObjects`**). Omits **`source_raw`** when **`listingId`** cannot be resolved (legacy ingest). JD from rendered DOM, JSON-LD description, **`__NEXT_DATA__`**, regex JSON-LD, or DOM plain text. **429/503** → **`null`**; phantom → **`{ phantom: true }`**. |
 
 ### `content/glassdoor/process.js`
 
 | Function | Description |
 | --- | --- |
 | `pushScanError(counters, entry)` | Caps **`errors`** at **200** for run logs (same pattern as LinkedIn/Indeed). |
-| `processGlassdoorCard(cardEl, config, counters)` | `INGEST_JOB` with **`{ job }`** (not `ingestJob()` helper). Ingest uses **`post_datetime: null`**. When **`easy_apply`** is true, **`apply_url`** is **`null`** (listing URL stays on **`job_url`**). Handles phantom (stale_skipped), rateLimited, jd_failed, duplicates. |
+| `processGlassdoorCard(cardEl, config, counters)` | **`ingestJob(job)`** (same correlation pattern as LinkedIn/Indeed). **`job`** may include **`source_raw`** from **`fetchGlassdoorJD`** when **`listingId`** came from **`__NEXT_DATA__`** or from **`jl=` + JSON-LD** (RSC path). **`post_datetime: null`**. When **`easy_apply`** is true, **`apply_url`** is **`null`** (listing URL stays on **`job_url`**). Handles phantom (stale_skipped), rateLimited, jd_failed, duplicates. |
 
 ### `content/glassdoor/page.js`
 
@@ -355,7 +363,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
    - **Popup:** user clicks **Scan Now** → `popup.js` sends `{ type: "MANUAL_SCAN" }` → **`handleManualScan()`** with no override (site from `config.website`).
 2. `background/scan_manual.js` `handleManualScan()` clears `scanPageState`, **PUT**s extension state, GETs config, **`POST /extension/run-log/start`** (including **`scan_all`** fields when present), builds the search URL, opens a **popup window**, stores `scanConfig` / `liveProgress`, **90-minute** safety timeout.
 3. **LinkedIn:** `init()` → `runSinglePage()` → job ids from **`data-occludable-job-id`** + Voyager + **`ingestJob`**. **Indeed:** `init()` runs **`ensureIndeedRunLog`** when needed, then loops **`processCard()`** over result cards. **Glassdoor:** `glassdoorMain()` waits for **`scanInProgress`** + **`scanConfig.website === "glassdoor"`**, then **`scanGlassdoorPage()`** → **`processGlassdoorCard()`** (single SERP page; completion via **`scanComplete`** like other sites).
-4. **LinkedIn:** `fetchJDViaVoyager()` → Voyager APIs → `ingestJob()` sends `{ type: "INGEST_JOB", job }`. **Indeed:** `fetchIndeedJD()` in **`rate_strategy.js`** (GraphQL + **10s** abort) → same `ingestJob()` path. **Glassdoor:** `fetchGlassdoorJD()` (job-listing HTML + **`__NEXT_DATA__`**) → **`processGlassdoorCard`** sends `{ type: "INGEST_JOB", job }` directly (does not use `shared/messaging.js`).
+4. **LinkedIn:** `fetchJDViaVoyager()` → Voyager APIs → `ingestJob()` sends `{ type: "INGEST_JOB", job }`. **Indeed:** **`getIndeedMosaicJobForJk`** (mosaic snapshot) + **`fetchIndeedJD()`** in **`rate_strategy.js`** (GraphQL + **10s** abort); ingest **`job`** may include **`source_raw: { mosaic, graphql }`** when at least one side is present. **Glassdoor:** **`fetchGlassdoorJD()`** (listing HTML + **`__NEXT_DATA__`** when present, else **`jl=` + JSON-LD**); **`processGlassdoorCard`** calls **`ingestJob`** with optional **`source_raw: { jobListing, json_ld }`** when a **`listingId`** could be resolved (**`buildGlassdoorSourceRaw`**).
 5. `background/ingest.js` `handleIngest()` POSTs to `/jobs/ingest`; the backend persists the job.
 6. **`post_datetime` on ingest:** **LinkedIn** — card `<time datetime>` and/or Voyager **`listedAt`** (see `content/linkedin/process.js`). **Indeed** — **`parseIndeedPostDate`** from card snippet text when it matches posted/active patterns (`content/indeed/process.js`). **Glassdoor** — **`null`** (listing age is not sent). The web app Jobs page may show “Posted” / “Scraped” using **`post_datetime`** and **`created_at`** for **LinkedIn** jobs only; other sites omit that row in the UI.
 7. The web app (or other client) loads jobs via the backend API (e.g. GET `/jobs`); the extension popup only mirrors **live** counters from `chrome.storage.local` (`liveProgress`), not the full job list.
@@ -367,7 +375,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | --- | --- | --- | --- |
 | `MANUAL_SCAN` | *(none)* | `popup/popup.js` | `background/runtime_messages.js` → `handleManualScan()` |
 | `DEBUG_LOG_FLUSH` | `{ runId, events }` | `content/shared/debug_logger.js` | `background/runtime_messages.js` → **`handleDebugLogFlush`** (`debug_flush.js`) |
-| `INGEST_JOB` | **`correlationId` set (LinkedIn/Indeed):** immediate **`{ ack, correlationId }`**, then **`handleIngest`** → **`tabs.sendMessage`** `INGEST_JOB_RESULT`. **No `correlationId` (Glassdoor):** legacy async **`sendResponse(result)`** after **`handleIngest`**. | `content/shared/messaging.js`, **`content/glassdoor/process.js`** | `background/runtime_messages.js` → `handleIngest()` |
+| `INGEST_JOB` | **`correlationId` set (LinkedIn / Indeed / Glassdoor):** immediate **`{ ack, correlationId }`**, then **`handleIngest`** → **`tabs.sendMessage`** `INGEST_JOB_RESULT`. *(Older docs referred to a Glassdoor-only legacy path without **`correlationId`** — current **`processGlassdoorCard`** uses **`ingestJob`**.)* | `content/shared/messaging.js` | `background/runtime_messages.js` → `handleIngest()` |
 | `INGEST_JOB_RESULT` | `{ correlationId, result }` — delivered to the tab that sent `INGEST_JOB` | `background/runtime_messages.js` | `content/shared/messaging.js` (waiter map) |
 | `GET_TAB_ID` | *(none)* | `content/linkedin/init.js`, `content/indeed/init.js` | `background/runtime_messages.js` |
 | `GET_EXTENSION_STATE` | *(none)* | `content/*/init.js` | `background/runtime_messages.js` → GET `/extension/state` |
@@ -380,6 +388,7 @@ Both triggers use **`setInterval(..., 3000)`** (3s).
 | `CHECK_STOP` | *(none)* | `content/glassdoor/page.js` | `background/runtime_messages.js` → `{ stop: boolean }` from `stopRequested` |
 | `SCAN_STARTED` | `{ keyword?, location?, source?, filters? }` | `content/glassdoor/init.js` (auto Glassdoor run log) | POST `/extension/run-log/start` → `{ runId }` |
 | `SCAN_COMPLETE` | `{ runId, counters? }` | `content/glassdoor/init.js` | PUT `/extension/run-log/{runId}` completed |
+| `GET_INDEED_MOSAIC_JOB_MAP` | *(none)* | `content/indeed/mosaic_map.js` | Background **`executeScript`** **MAIN** world → **`jobsByJk`** map |
 | `GET_MAIN_WORLD_VALUE` | *(none)* | `content/indeed/rate_strategy.js` (Indeed oneGraph API key) | `chrome.scripting.executeScript` **MAIN** world |
 
 Internal scan coordination uses **`chrome.storage.local`**. Keys include:
@@ -402,7 +411,7 @@ Other keys may appear for short periods during saves or errors.
 
 ## Troubleshooting
 
-**Indeed scan hangs or long stalls:** The Indeed GraphQL JD fetch uses a **10s** abort; slow or stuck network calls return **`phantom`** instead of blocking indefinitely. **Easy apply** is detected with synchronous DOM checks in **`process.js`** only (no **`executeScript`** from the content script). The **`GET_MAIN_WORLD_VALUE`** path (background **`executeScript`**) exists solely to read **`oneGraphApiKey`** for GraphQL — if that fails, **`fetchIndeedJD`** returns **`null`** and the card is skipped as JD failed.
+**Indeed scan hangs or long stalls:** The Indeed GraphQL JD fetch uses a **10s** abort; slow or stuck network calls return **`phantom`** instead of blocking indefinitely. **Easy apply** is detected with synchronous DOM checks in **`process.js`** only (no **`executeScript`** from the content script). The **`GET_MAIN_WORLD_VALUE`** path (background **`executeScript`**) exists solely to read **`oneGraphApiKey`** for GraphQL — if that fails, **`fetchIndeedJD`** returns **`{ error: "no_api_key" }`** and the card is skipped as JD failed. Mosaic **`source_raw.mosaic`** is filled via **`GET_INDEED_MOSAIC_JOB_MAP`** when **`window.mosaic.providerData`** exposes per-card models.
 
 **JD / ingest failures on LinkedIn with mysterious “Internal Server Error” plain-text responses:** Some browser extensions (notably **Adobe Acrobat**) inject into LinkedIn and override `window.fetch`. Content scripts must **never** `fetch` the JHA backend directly; job ingest uses **`INGEST_JOB`** → **`background/ingest.js`** only. If you still see odd behavior, open `chrome://extensions` → Adobe Acrobat → **Details** → **Site access** → restrict or remove `linkedin.com`, or disable that extension while scanning.
 

@@ -92,7 +92,7 @@ Opens the app at `http://localhost:5173` — **Config** (`/`), **Profile** (`/pr
 Click **Scan Now** in the popup (or trigger a scan from the web UI **Jobs** page). The extension will:
 
 1. Open a **LinkedIn**, **Indeed**, or **Glassdoor** search tab according to the trigger / config
-2. Scrape job cards and fetch full descriptions (Voyager on LinkedIn, GraphQL/HTML on Indeed, listing HTML on Glassdoor)
+2. Scrape job cards and fetch full descriptions (Voyager on LinkedIn, GraphQL/HTML on Indeed, listing HTML on Glassdoor — **`__NEXT_DATA__`** when present, otherwise **`jl=` + JSON-LD** when the page exposes **`JobPosting`** schema)
 3. Send each job to the backend (`POST /jobs/ingest`) for URL/hash dedup and storage
 4. Show live progress in the popup
 

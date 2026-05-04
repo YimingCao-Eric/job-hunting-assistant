@@ -46,6 +46,7 @@
         "content/shared/delays.js",
         "content/shared/messaging.js",
         "content/shared/init_helpers.js",
+        "content/indeed/mosaic_map.js",
         "content/indeed/dom.js",
         "content/indeed/rate_strategy.js",
         "content/indeed/fetch_jd.js",

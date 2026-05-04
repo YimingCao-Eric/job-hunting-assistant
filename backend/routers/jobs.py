@@ -119,6 +119,45 @@ def _parse_iso_date(raw):
         return None
 
 
+def _to_str_or_none(v):
+    """Coerce ints/floats to str for VARCHAR columns. Pass through
+    strings and None unchanged. asyncpg won't auto-coerce numeric →
+    text, so any source field that's a JSON number but maps to a
+    VARCHAR column must go through this."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    return None
+
+
+def _to_int_or_none(v):
+    """Coerce strings to int for INTEGER columns, with None passthrough.
+    Returns None for non-numeric strings, dicts, lists, etc."""
+    if v is None:
+        return None
+    if isinstance(v, bool):  # bool is a subclass of int — exclude explicitly
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return int(float(s))
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
 def _linkedin_apply_method_type(apply_method: dict | None) -> str | None:
     if not isinstance(apply_method, dict):
         return None
@@ -351,11 +390,19 @@ def build_linkedin_params(body: ScrapedJobIngest) -> dict:
 
     title_entity = _resolve_linkedin_included(included, data.get("standardizedTitle"))
     emp_entity = _resolve_linkedin_included(included, data.get("employmentStatus"))
+    company_details = data.get("companyDetails") or {}
     company_urn = None
-    for v in (data.get("companyDetails") or {}).values():
-        if isinstance(v, dict) and isinstance(v.get("company"), str):
-            company_urn = v["company"]
-            break
+    if isinstance(company_details, dict):
+        candidate = company_details.get("company")
+        if isinstance(candidate, str) and candidate.startswith("urn:li:"):
+            company_urn = candidate
+        else:
+            for v in company_details.values():
+                if isinstance(v, dict):
+                    nested = v.get("company")
+                    if isinstance(nested, str) and nested.startswith("urn:li:"):
+                        company_urn = nested
+                        break
     company_entity = _resolve_linkedin_included(included, company_urn)
 
     workplace_urns_raw = data.get("workplaceTypes")
@@ -376,57 +423,80 @@ def build_linkedin_params(body: ScrapedJobIngest) -> dict:
     )
 
     return {
-        "job_url": data.get("jobPostingUrl"),
+        "job_url": _to_str_or_none(data.get("jobPostingUrl")),
         "scan_run_id": body.scan_run_id,
         "source_raw": body.source_raw,
-        "job_posting_id": data.get("jobPostingId"),
-        "job_posting_url": data.get("jobPostingUrl"),
+        "job_posting_id": _to_str_or_none(data.get("jobPostingId")),
+        "job_posting_url": _to_str_or_none(data.get("jobPostingUrl")),
         "listed_at": data.get("listedAt"),
         "original_listed_at": data.get("originalListedAt"),
-        "job_state": data.get("jobState"),
+        "job_state": _to_str_or_none(data.get("jobState")),
         "job_application_limit_reached": data.get("jobApplicationLimitReached"),
         "expire_at": data.get("expireAt"),
         "closed_at": data.get("closedAt"),
-        "formatted_location": data.get("formattedLocation"),
-        "country_urn": data.get("country"),
-        "location_urn": data.get("locationUrn"),
-        "location_visibility": data.get("locationVisibility"),
+        "formatted_location": _to_str_or_none(data.get("formattedLocation")),
+        "country_urn": _to_str_or_none(data.get("country")),
+        "location_urn": _to_str_or_none(data.get("locationUrn")),
+        "location_visibility": _to_str_or_none(data.get("locationVisibility")),
         "postal_address": data.get("postalAddress"),
         "standardized_addresses": data.get("standardizedAddresses"),
-        "job_region": data.get("jobRegion"),
+        "job_region": _to_str_or_none(data.get("jobRegion")),
         "work_remote_allowed": data.get("workRemoteAllowed"),
         "workplace_types_urns": data.get("workplaceTypes"),
         "workplace_types_labels": data.get("workplaceTypesResolutionResults"),
-        "formatted_employment_status": data.get("formattedEmploymentStatus"),
-        "employment_status_urn": data.get("employmentStatus"),
+        "formatted_employment_status": _to_str_or_none(
+            data.get("formattedEmploymentStatus")
+        ),
+        "employment_status_urn": _to_str_or_none(data.get("employmentStatus")),
         "formatted_industries": data.get("formattedIndustries"),
         "formatted_job_functions": data.get("formattedJobFunctions"),
-        "title": data.get("title"),
-        "standardized_title": (title_entity or {}).get("localizedName"),
-        "formatted_experience_level": data.get("formattedExperienceLevel"),
-        "skills_description": data.get("skillsDescription"),
-        "apply_method_type": _linkedin_apply_method_type(apply_method),
-        "company_apply_url": (
+        "title": _to_str_or_none(data.get("title")),
+        "standardized_title": _to_str_or_none(
+            (title_entity or {}).get("localizedName")
+        ),
+        "formatted_experience_level": _to_str_or_none(
+            data.get("formattedExperienceLevel")
+        ),
+        "skills_description": _to_str_or_none(data.get("skillsDescription")),
+        "apply_method_type": _to_str_or_none(
+            _linkedin_apply_method_type(apply_method)
+        ),
+        "company_apply_url": _to_str_or_none(
             apply_method.get("companyApplyUrl") if apply_method else None
         ),
-        "applicant_tracking_system": data.get("applicantTrackingSystem"),
-        "top_level_company_apply_url": data.get("companyApplyUrl"),
+        "applicant_tracking_system": _to_str_or_none(
+            data.get("applicantTrackingSystem")
+        ),
+        "top_level_company_apply_url": _to_str_or_none(data.get("companyApplyUrl")),
         "salary_min": first_breakdown.get("minSalary"),
         "salary_max": first_breakdown.get("maxSalary"),
-        "salary_currency": first_breakdown.get("currencyCode"),
-        "salary_period": first_breakdown.get("payPeriod"),
+        "salary_currency": _to_str_or_none(first_breakdown.get("currencyCode")),
+        "salary_period": _to_str_or_none(first_breakdown.get("payPeriod")),
         "salary_provided_by_employer": si.get("providedByEmployer"),
-        "description_text": desc_block.get("text"),
+        "description_text": _to_str_or_none(desc_block.get("text")),
         "inferred_benefits": data.get("inferredBenefits"),
         "benefits": data.get("benefits"),
-        "company_name": (company_entity or {}).get("name"),
-        "company_universal_name": (company_entity or {}).get("universalName"),
-        "company_url": (company_entity or {}).get("url"),
-        "company_description": (company_entity or {}).get("description"),
-        "title_entity_urn": (title_entity or {}).get("entityUrn"),
-        "employment_status_label": (emp_entity or {}).get("localizedName"),
-        "employment_status_entity_urn": (emp_entity or {}).get("entityUrn"),
-        "workplace_type_entity_urn": (workplace_entity or {}).get("entityUrn"),
+        "company_name": _to_str_or_none((company_entity or {}).get("name")),
+        "company_universal_name": _to_str_or_none(
+            (company_entity or {}).get("universalName")
+        ),
+        "company_url": _to_str_or_none(
+            (company_entity or {}).get("url")
+            or (company_entity or {}).get("companyPageUrl")
+        ),
+        "company_description": _to_str_or_none(
+            (company_entity or {}).get("description")
+        ),
+        "title_entity_urn": _to_str_or_none((title_entity or {}).get("entityUrn")),
+        "employment_status_label": _to_str_or_none(
+            (emp_entity or {}).get("localizedName")
+        ),
+        "employment_status_entity_urn": _to_str_or_none(
+            (emp_entity or {}).get("entityUrn")
+        ),
+        "workplace_type_entity_urn": _to_str_or_none(
+            (workplace_entity or {}).get("entityUrn")
+        ),
     }
 
 
@@ -449,12 +519,13 @@ def build_indeed_params(body: ScrapedJobIngest) -> dict:
     jk = mosaic.get("jobkey")
     if jk is None and graphql_present:
         jk = graphql.get("jobKey") or graphql.get("jobkey")
-    if jk is None or jk == "":
+    jobkey_str = _to_str_or_none(jk)
+    if not jobkey_str:
         raise HTTPException(
             status_code=400,
             detail="Indeed ingest missing jobkey for job_url",
         )
-    job_url = f"https://ca.indeed.com/viewjob?jk={jk}"
+    job_url = f"https://ca.indeed.com/viewjob?jk={jobkey_str}"
 
     ext = (
         mosaic.get("extractedSalary")
@@ -492,69 +563,69 @@ def build_indeed_params(body: ScrapedJobIngest) -> dict:
         "source_raw": body.source_raw,
         "mosaic_present": mosaic_present,
         "graphql_present": graphql_present,
-        "jobkey": str(jk),
-        "link": mosaic.get("link"),
-        "view_job_link": mosaic.get("viewJobLink"),
-        "more_loc_url": mosaic.get("moreLocUrl"),
-        "third_party_apply_url": mosaic.get("thirdPartyApplyUrl"),
+        "jobkey": jobkey_str,
+        "link": _to_str_or_none(mosaic.get("link")),
+        "view_job_link": _to_str_or_none(mosaic.get("viewJobLink")),
+        "more_loc_url": _to_str_or_none(mosaic.get("moreLocUrl")),
+        "third_party_apply_url": _to_str_or_none(mosaic.get("thirdPartyApplyUrl")),
         "pub_date": mosaic.get("pubDate"),
         "create_date": mosaic.get("createDate"),
         "expiration_date": mosaic.get("expirationDate"),
         "expired": mosaic.get("expired"),
-        "title": mosaic.get("title"),
-        "display_title": mosaic.get("displayTitle"),
-        "norm_title": mosaic.get("normTitle"),
+        "title": _to_str_or_none(mosaic.get("title")),
+        "display_title": _to_str_or_none(mosaic.get("displayTitle")),
+        "norm_title": _to_str_or_none(mosaic.get("normTitle")),
         "job_types": mosaic.get("jobTypes"),
         "taxonomy_attributes": mosaic.get("taxonomyAttributes"),
-        "formatted_location": mosaic.get("formattedLocation"),
-        "job_location_city": mosaic.get("jobLocationCity"),
-        "job_location_state": mosaic.get("jobLocationState"),
-        "job_location_postal": mosaic.get("jobLocationPostal"),
-        "location_count": mosaic.get("locationCount"),
-        "additional_location_link": mosaic.get("additionalLocationLink"),
+        "formatted_location": _to_str_or_none(mosaic.get("formattedLocation")),
+        "job_location_city": _to_str_or_none(mosaic.get("jobLocationCity")),
+        "job_location_state": _to_str_or_none(mosaic.get("jobLocationState")),
+        "job_location_postal": _to_str_or_none(mosaic.get("jobLocationPostal")),
+        "location_count": _to_int_or_none(mosaic.get("locationCount")),
+        "additional_location_link": _to_str_or_none(mosaic.get("additionalLocationLink")),
         "remote_location": mosaic.get("remoteLocation"),
         "salary_min": ext.get("min"),
         "salary_max": ext.get("max"),
-        "salary_period": ext.get("type"),
-        "salary_currency": snip.get("currency"),
-        "salary_text": snip.get("salaryTextFormatted"),
-        "salary_snippet_source": snip.get("source"),
-        "company": mosaic.get("company"),
+        "salary_period": _to_str_or_none(ext.get("type")),
+        "salary_currency": _to_str_or_none(snip.get("currency")),
+        "salary_text": _to_str_or_none(snip.get("salaryTextFormatted")),
+        "salary_snippet_source": _to_str_or_none(snip.get("source")),
+        "company": _to_str_or_none(mosaic.get("company")),
         "indeed_apply_enabled": mosaic.get("indeedApplyEnabled"),
         "indeed_applyable": mosaic.get("indeedApplyable"),
-        "apply_count": mosaic.get("applyCount"),
-        "screener_questions_url": mosaic.get("screenerQuestionsURL"),
+        "apply_count": _to_int_or_none(mosaic.get("applyCount")),
+        "screener_questions_url": _to_str_or_none(mosaic.get("screenerQuestionsURL")),
         "match_negative_taxonomy": jsm.get("taxoEntityMatchesNegative"),
         "match_mismatching_entities": jsm.get("sortedMisMatchingEntityDisplayText"),
-        "num_hires": mosaic.get("numHires"),
-        "employer_canonical_url": graphql.get("url"),
+        "num_hires": _to_int_or_none(mosaic.get("numHires")),
+        "employer_canonical_url": _to_str_or_none(graphql.get("url")),
         "graphql_date_published": _parse_iso_date(graphql.get("datePublished")),
         "graphql_date_on_indeed": _parse_iso_date(graphql.get("dateOnIndeed")),
         "graphql_expired": graphql.get("expired"),
-        "graphql_title": graphql.get("title"),
-        "graphql_normalized_title": graphql.get("normalizedTitle"),
+        "graphql_title": _to_str_or_none(graphql.get("title")),
+        "graphql_normalized_title": _to_str_or_none(graphql.get("normalizedTitle")),
         "attributes": graphql.get("attributes"),
-        "location_formatted_long": formatted.get("long"),
-        "graphql_location_city": loc.get("city"),
-        "graphql_location_postal_code": loc.get("postalCode"),
-        "graphql_location_street_address": loc.get("streetAddress"),
-        "graphql_location_admin1_code": loc.get("admin1Code"),
-        "graphql_location_country_code": loc.get("countryCode"),
-        "description_text": description_text,
-        "language": graphql.get("language"),
-        "employer_name": emp.get("name"),
-        "employer_company_page_url": emp.get("relativeCompanyPageUrl"),
-        "source_name": src.get("name"),
-        "graphql_salary_period": base.get("unitOfWork"),
+        "location_formatted_long": _to_str_or_none(formatted.get("long")),
+        "graphql_location_city": _to_str_or_none(loc.get("city")),
+        "graphql_location_postal_code": _to_str_or_none(loc.get("postalCode")),
+        "graphql_location_street_address": _to_str_or_none(loc.get("streetAddress")),
+        "graphql_location_admin1_code": _to_str_or_none(loc.get("admin1Code")),
+        "graphql_location_country_code": _to_str_or_none(loc.get("countryCode")),
+        "description_text": _to_str_or_none(description_text),
+        "language": _to_str_or_none(graphql.get("language")),
+        "employer_name": _to_str_or_none(emp.get("name")),
+        "employer_company_page_url": _to_str_or_none(emp.get("relativeCompanyPageUrl")),
+        "source_name": _to_str_or_none(src.get("name")),
+        "graphql_salary_period": _to_str_or_none(base.get("unitOfWork")),
     }
 
 
 def build_glassdoor_params(body: ScrapedJobIngest) -> dict:
     jl = (body.source_raw or {}).get("jobListing") or {}
     listing_id = jl.get("jobDetailsData", {}).get("listingId")
-    if not listing_id:
+    listing_id_str = _to_str_or_none(listing_id)
+    if not listing_id_str:
         raise HTTPException(status_code=400, detail="Glassdoor ingest missing listing_id")
-    listing_id_str = str(listing_id)
     job_url = (
         f"https://www.glassdoor.ca/job-listing/listing-{listing_id_str}.htm"
         f"?jl={listing_id_str}"
@@ -603,69 +674,73 @@ def build_glassdoor_params(body: ScrapedJobIngest) -> dict:
         "scan_run_id": body.scan_run_id,
         "source_raw": body.source_raw,
         "listing_id": listing_id_str,
-        "goc_id": jdd.get("gocId"),
-        "job_country_id": jdd.get("jobCountryId"),
-        "job_title": jdd.get("jobTitle"),
-        "normalized_job_title": jdd.get("normalizedJobTitle"),
+        "goc_id": _to_int_or_none(jdd.get("gocId")),
+        "job_country_id": _to_int_or_none(jdd.get("jobCountryId")),
+        "job_title": _to_str_or_none(jdd.get("jobTitle")),
+        "normalized_job_title": _to_str_or_none(jdd.get("normalizedJobTitle")),
         "expired": jdd.get("expired"),
-        "employer_active_status": jdd.get("employerActiveStatus"),
+        "employer_active_status": _to_str_or_none(jdd.get("employerActiveStatus")),
         "is_easy_apply": jdd.get("isEasyApply"),
-        "job_link": jdd.get("jobLink"),
-        "seo_job_link": jdd.get("seoJobLink"),
-        "salary_currency": jdd.get("payCurrency"),
-        "salary_period": jdd.get("payPeriod"),
-        "salary_source": jdd.get("salarySource"),
+        "job_link": _to_str_or_none(jdd.get("jobLink")),
+        "seo_job_link": _to_str_or_none(jdd.get("seoJobLink")),
+        "salary_currency": _to_str_or_none(jdd.get("payCurrency")),
+        "salary_period": _to_str_or_none(jdd.get("payPeriod")),
+        "salary_source": _to_str_or_none(jdd.get("salarySource")),
         "pay_period_adjusted_pay": jdd.get("payPeriodAdjustedPay"),
-        "location_name": jdd.get("locationName"),
+        "location_name": _to_str_or_none(jdd.get("locationName")),
         "location": jdd.get("location"),
-        "employer_name": jdd.get("employerName"),
-        "employer_overview": jdd.get("employerOverview"),
+        "employer_name": _to_str_or_none(jdd.get("employerName")),
+        "employer_overview": _to_str_or_none(jdd.get("employerOverview")),
         "indeed_job_attribute": jdd.get("indeedJobAttribute"),
         "skills_labels": indeed_attr.get("skillsLabel"),
         "education_labels": indeed_attr.get("educationLabel"),
-        "job_description_plain": jdd.get("jobDescription"),
-        "employer_benefits_overview": jdd.get("employerBenefitsOverview"),
+        "job_description_plain": _to_str_or_none(jdd.get("jobDescription")),
+        "employer_benefits_overview": _to_str_or_none(jdd.get("employerBenefitsOverview")),
         "employer_benefits_reviews": jdd.get("employerBenefitsReviews"),
-        "title": jp.get("title"),
+        "title": _to_str_or_none(jp.get("title")),
         "date_posted": _parse_iso_date(jp.get("datePosted")),
         "valid_through": _parse_iso_date(jp.get("validThrough")),
-        "description": jp.get("description"),
-        "experience_requirements_description": er.get("description"),
-        "experience_requirements_months": er.get("monthsOfExperience"),
-        "education_requirements_credential": edreq.get("credentialCategory"),
+        "description": _to_str_or_none(jp.get("description")),
+        "experience_requirements_description": _to_str_or_none(er.get("description")),
+        "experience_requirements_months": _to_int_or_none(
+            er.get("monthsOfExperience")
+        ),
+        "education_requirements_credential": _to_str_or_none(
+            edreq.get("credentialCategory")
+        ),
         "employment_type": jp.get("employmentType"),
-        "jsonld_salary_currency_top": jp.get("salaryCurrency"),
-        "jsonld_salary_currency": bs.get("currency"),
+        "jsonld_salary_currency_top": _to_str_or_none(jp.get("salaryCurrency")),
+        "jsonld_salary_currency": _to_str_or_none(bs.get("currency")),
         "jsonld_salary_min": bsval.get("minValue"),
         "jsonld_salary_max": bsval.get("maxValue"),
-        "jsonld_salary_period": bsval.get("unitText"),
+        "jsonld_salary_period": _to_str_or_none(bsval.get("unitText")),
         "job_location": jp.get("jobLocation"),
-        "job_location_type": jp.get("jobLocationType"),
+        "job_location_type": _to_str_or_none(jp.get("jobLocationType")),
         "hiring_organization": jp.get("hiringOrganization"),
-        "industry": jp.get("industry"),
+        "industry": _to_str_or_none(jp.get("industry")),
         "direct_apply": jp.get("directApply"),
-        "job_benefits": jp.get("jobBenefits"),
-        "header_goc": header.get("goc"),
+        "job_benefits": _to_str_or_none(jp.get("jobBenefits")),
+        "header_goc": _to_str_or_none(header.get("goc")),
         "job_type": header.get("jobType"),
         "job_type_keys": header.get("jobTypeKeys"),
         "remote_work_types": header.get("remoteWorkTypes"),
         "header_expired": header.get("expired"),
         "header_easy_apply": header.get("easyApply"),
-        "header_apply_url": header.get("applyUrl"),
-        "header_salary_source": header.get("salarySource"),
-        "header_salary_currency": header.get("payCurrency"),
-        "header_salary_period": header.get("payPeriod"),
+        "header_apply_url": _to_str_or_none(header.get("applyUrl")),
+        "header_salary_source": _to_str_or_none(header.get("salarySource")),
+        "header_salary_currency": _to_str_or_none(header.get("payCurrency")),
+        "header_salary_period": _to_str_or_none(header.get("payPeriod")),
         "header_employer": header.get("employer"),
-        "map_address": mmap.get("address"),
-        "map_city_name": mmap.get("cityName"),
-        "map_country": mmap.get("country"),
-        "map_state_name": mmap.get("stateName"),
-        "map_location_name": mmap.get("locationName"),
-        "map_postal_code": mmap.get("postalCode"),
+        "map_address": _to_str_or_none(mmap.get("address")),
+        "map_city_name": _to_str_or_none(mmap.get("cityName")),
+        "map_country": _to_str_or_none(mmap.get("country")),
+        "map_state_name": _to_str_or_none(mmap.get("stateName")),
+        "map_location_name": _to_str_or_none(mmap.get("locationName")),
+        "map_postal_code": _to_str_or_none(mmap.get("postalCode")),
         "map_employer": mmap.get("employer"),
         "discover_date": discover_date,
-        "job_title_text": jjob.get("jobTitleText"),
-        "jobview_job_description": jjob.get("description"),
+        "job_title_text": _to_str_or_none(jjob.get("jobTitleText")),
+        "jobview_job_description": _to_str_or_none(jjob.get("description")),
     }
 
 

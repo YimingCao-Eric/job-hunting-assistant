@@ -113,6 +113,76 @@ function extractFirstJobPostingFromDoc(doc) {
 }
 
 /**
+ * Full JobPosting node for source_raw.json_ld (§3 v6-3A).
+ * Prefer @type === 'JobPosting'; else first JobPosting inside @graph / arrays.
+ */
+function extractGlassdoorJobPostingJsonLd(doc) {
+  const ldNodes = doc.querySelectorAll('script[type="application/ld+json"]');
+  for (const node of ldNodes) {
+    try {
+      const parsed = JSON.parse(node.textContent);
+      const t = parsed["@type"];
+      if (t === "JobPosting") return parsed;
+      if (Array.isArray(t) && t.includes("JobPosting")) return parsed;
+      const postings = [];
+      collectJobPostingObjects(parsed, postings);
+      if (postings[0]) return postings[0];
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse Next.js embed once per listing HTML response.
+ */
+function parseGlassdoorNextData(html) {
+  const nextMatch = html.match(
+    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+  );
+  if (!nextMatch) return null;
+  try {
+    return JSON.parse(nextMatch[1]);
+  } catch {
+    return null;
+  }
+}
+
+function getListingIdFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const jl = u.searchParams.get("jl");
+    if (jl && /^[0-9]+$/.test(jl)) return jl;
+  } catch {
+    /* invalid URL */
+  }
+  return null;
+}
+
+/**
+ * source_raw for Glassdoor ingest — listing_id required (backend 400 otherwise).
+ * Path 1: __NEXT_DATA__ jobListing (legacy). Path 2: RSC pages — ?jl= + JSON-LD only.
+ */
+function buildGlassdoorSourceRaw(jobListingSubtree, jsonLd, fetchedUrl) {
+  const ndListingId = jobListingSubtree?.jobDetailsData?.listingId;
+  if (ndListingId) {
+    return {
+      jobListing: jobListingSubtree,
+      json_ld: jsonLd ?? null,
+    };
+  }
+  const urlListingId = getListingIdFromUrl(fetchedUrl || "");
+  if (urlListingId && jsonLd) {
+    return {
+      jobListing: { jobDetailsData: { listingId: urlListingId } },
+      json_ld: jsonLd,
+    };
+  }
+  return null;
+}
+
+/**
  * Parse JSON-LD scripts for JobPosting: directApply + location.
  * @param {string | Document} htmlOrDoc
  */
@@ -204,6 +274,21 @@ async function fetchGlassdoorJD(jobUrl, jl) {
 
       const html = await res.text();
       const doc = new DOMParser().parseFromString(html, "text/html");
+      const nextData = parseGlassdoorNextData(html);
+      const jobListingSubtree =
+        nextData?.props?.pageProps?.jobListing &&
+        typeof nextData.props.pageProps.jobListing === "object"
+          ? nextData.props.pageProps.jobListing
+          : null;
+      const jsonLdForSourceRaw = extractGlassdoorJobPostingJsonLd(doc);
+      const glassdoorSourceRaw = buildGlassdoorSourceRaw(
+        jobListingSubtree,
+        jsonLdForSourceRaw,
+        safeUrl
+      );
+      const attachSourceRaw = (payload) =>
+        glassdoorSourceRaw ? { ...payload, source_raw: glassdoorSourceRaw } : payload;
+
       const { easyApply: easyApplyFromLd, location: locationFromLd } =
         extractJsonLdJobPostingMeta(doc);
 
@@ -232,30 +317,26 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       }
 
       // Strategy: __NEXT_DATA__ (most reliable — Glassdoor is Next.js)
-      if (!hasJdText(jd)) {
-        const nextMatch = html.match(
-          /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
-        );
-        if (nextMatch) {
-          try {
-            const d = JSON.parse(nextMatch[1]);
-            const desc =
-              d?.props?.pageProps?.jobListing?.jobview?.job?.description ||
-              d?.props?.pageProps?.jobListing?.jobview?.job?.descriptionFragments?.join("\n") ||
-              d?.props?.pageProps?.jobDetail?.jobDescription ||
-              d?.props?.pageProps?.job?.description ||
-              null;
-            if (desc) {
-              const clean = desc.includes("<")
-                ? stripHtmlToStructuredText(desc)
-                : String(desc).replace(/\s+/g, " ").trim();
-              if (hasJdText(clean)) {
-                jd = clean;
-              }
+      if (!hasJdText(jd) && nextData) {
+        try {
+          const desc =
+            nextData?.props?.pageProps?.jobListing?.jobview?.job?.description ||
+            nextData?.props?.pageProps?.jobListing?.jobview?.job?.descriptionFragments?.join(
+              "\n"
+            ) ||
+            nextData?.props?.pageProps?.jobDetail?.jobDescription ||
+            nextData?.props?.pageProps?.job?.description ||
+            null;
+          if (desc) {
+            const clean = desc.includes("<")
+              ? stripHtmlToStructuredText(desc)
+              : String(desc).replace(/\s+/g, " ").trim();
+            if (hasJdText(clean)) {
+              jd = clean;
             }
-          } catch {
-            /* fall through */
           }
+        } catch {
+          /* fall through */
         }
       }
 
@@ -272,12 +353,14 @@ async function fetchGlassdoorJD(jobUrl, jl) {
                 : String(desc).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
               if (hasJdText(clean)) {
                 const loc = locationFromJobPosting(d) || locationFromLd;
-                return withMeta({
-                  jd: clean,
-                  easy_apply: easyApplyFromLd,
-                  location: loc,
-                  http_status: res.status,
-                });
+                return attachSourceRaw(
+                  withMeta({
+                    jd: clean,
+                    easy_apply: easyApplyFromLd,
+                    location: loc,
+                    http_status: res.status,
+                  })
+                );
               }
             }
           } catch {
@@ -300,11 +383,13 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       }
 
       if (hasJdText(jd)) {
-        return withMeta({
-          jd: String(jd).trim(),
-          easy_apply: easyApplyFromLd,
-          http_status: res.status,
-        });
+        return attachSourceRaw(
+          withMeta({
+            jd: String(jd).trim(),
+            easy_apply: easyApplyFromLd,
+            http_status: res.status,
+          })
+        );
       }
 
       console.warn(`[JHA-Glassdoor] fetch_jd: no JD found for jl=${jl} url=${safeUrl}`);

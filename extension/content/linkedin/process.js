@@ -105,6 +105,9 @@ async function processCard(card, config, counters, preExtractedCardData = null) 
       salary_min: config.salary_min,
     },
     scan_run_id: config.runId,
+    ...(voyagerResult.source_raw
+      ? { source_raw: voyagerResult.source_raw }
+      : {}),
   };
 
   const ingStart = Date.now();
