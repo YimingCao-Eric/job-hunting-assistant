@@ -5,7 +5,8 @@ from time import monotonic
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import bindparam, exists, func, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth import get_current_user
@@ -58,6 +59,616 @@ def _hash_description(text: str | None) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _resolve_linkedin_included(
+    included: list | None,
+    entity_urn: str | None,
+) -> dict | None:
+    """Find the entity in included[] whose entityUrn matches.
+    Returns None if not found or if either input is missing.
+    """
+    if not included or not entity_urn:
+        return None
+    if not isinstance(included, list):
+        return None
+    for entity in included:
+        if not isinstance(entity, dict):
+            continue
+        if entity.get("entityUrn") == entity_urn:
+            return entity
+    return None
+
+
+def _parse_glassdoor_discover_date(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        d = datetime.fromisoformat(raw)
+        return (
+            d.replace(tzinfo=dt_timezone.utc)
+            if d.tzinfo is None
+            else d.astimezone(dt_timezone.utc)
+        )
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "ingest_discover_date_parse_failed %s",
+            {"raw": raw, "error": str(e)},
+        )
+        return None
+
+
+def _parse_iso_date(raw):
+    """Parse ISO 'YYYY-MM-DD' string to datetime.date.
+    Returns None for None / empty / unparseable; logs warning on parse failure."""
+    from datetime import date
+
+    if raw is None:
+        return None
+    if isinstance(raw, date):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        # date.fromisoformat handles 'YYYY-MM-DD' and rejects fancier forms cleanly.
+        # If raw includes a time portion (e.g. '2026-04-01T00:00:00'), take the date prefix.
+        return date.fromisoformat(raw[:10])
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            "ingest_iso_date_parse_failed %s",
+            {"raw": raw, "error": str(e)},
+        )
+        return None
+
+
+def _linkedin_apply_method_type(apply_method: dict | None) -> str | None:
+    if not isinstance(apply_method, dict):
+        return None
+    t = apply_method.get("$type")
+    if not isinstance(t, str):
+        return None
+    return t.rsplit(".", 1)[-1] if "." in t else t
+
+
+# Define column list once per table — single source of truth for
+# the INSERT column order. Order must match the params dict keys.
+LINKEDIN_COLS = [
+    "job_url", "scan_run_id", "source_raw",  # JSONB
+    "job_posting_id", "job_posting_url",
+    "listed_at", "original_listed_at", "job_state",
+    "job_application_limit_reached", "expire_at", "closed_at",
+    "formatted_location", "country_urn", "location_urn",
+    "location_visibility",
+    "postal_address",          # JSONB
+    "standardized_addresses",  # JSONB
+    "job_region",
+    "work_remote_allowed",
+    "workplace_types_urns",  # JSONB
+    "workplace_types_labels",  # JSONB
+    "formatted_employment_status", "employment_status_urn",
+    "formatted_industries",  # JSONB
+    "formatted_job_functions",  # JSONB
+    "title", "standardized_title", "formatted_experience_level",
+    "skills_description",
+    "apply_method_type", "company_apply_url",
+    "applicant_tracking_system", "top_level_company_apply_url",
+    "salary_min", "salary_max", "salary_currency", "salary_period",
+    "salary_provided_by_employer",
+    "description_text",
+    "inferred_benefits",  # JSONB
+    "benefits",  # JSONB
+    "company_name", "company_universal_name", "company_url",
+    "company_description",
+    "title_entity_urn", "employment_status_label",
+    "employment_status_entity_urn", "workplace_type_entity_urn",
+]
+
+# JSONB columns need explicit bindparam declarations so SQLAlchemy
+# serializes Python dicts as JSON instead of str(dict) Python repr.
+LINKEDIN_JSONB_COLS = [
+    "source_raw",
+    "postal_address",
+    "standardized_addresses",
+    "workplace_types_urns",
+    "workplace_types_labels",
+    "formatted_industries",
+    "formatted_job_functions",
+    "inferred_benefits",
+    "benefits",
+]
+
+_cols_sql = ", ".join(LINKEDIN_COLS)
+_vals_sql = ", ".join(f":{c}" for c in LINKEDIN_COLS)
+
+INSERT_LINKEDIN_JOB = text(f"""
+    WITH inserted AS (
+        INSERT INTO linkedin_jobs ({_cols_sql})
+        VALUES ({_vals_sql})
+        ON CONFLICT (job_url) DO NOTHING
+        RETURNING id
+    )
+    SELECT id, false AS already_exists FROM inserted
+    UNION ALL
+    SELECT id, true AS already_exists FROM linkedin_jobs
+     WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
+    LIMIT 1
+""").bindparams(*(bindparam(c, type_=JSONB) for c in LINKEDIN_JSONB_COLS))
+
+
+INDEED_COLS = [
+    "job_url", "scan_run_id", "source_raw",  # JSONB
+    "mosaic_present", "graphql_present",
+    "jobkey", "link", "view_job_link", "more_loc_url", "third_party_apply_url",
+    "pub_date", "create_date", "expiration_date", "expired",
+    "title", "display_title", "norm_title",
+    "job_types",  # JSONB
+    "taxonomy_attributes",  # JSONB
+    "formatted_location", "job_location_city", "job_location_state",
+    "job_location_postal", "location_count", "additional_location_link",
+    "remote_location",
+    "salary_min", "salary_max", "salary_period", "salary_currency",
+    "salary_text", "salary_snippet_source",
+    "company",
+    "indeed_apply_enabled", "indeed_applyable", "apply_count",
+    "screener_questions_url",
+    "match_negative_taxonomy",  # JSONB
+    "match_mismatching_entities",  # JSONB
+    "num_hires",
+    "employer_canonical_url",
+    "graphql_date_published", "graphql_date_on_indeed", "graphql_expired",
+    "graphql_title", "graphql_normalized_title",
+    "attributes",  # JSONB
+    "location_formatted_long", "graphql_location_city",
+    "graphql_location_postal_code", "graphql_location_street_address",
+    "graphql_location_admin1_code", "graphql_location_country_code",
+    "description_text", "language",
+    "employer_name", "employer_company_page_url",
+    "source_name",
+    "graphql_salary_period",
+]
+
+INDEED_JSONB_COLS = [
+    "source_raw",
+    "job_types",
+    "taxonomy_attributes",
+    "match_negative_taxonomy",
+    "match_mismatching_entities",
+    "attributes",
+]
+
+_indeed_cols_sql = ", ".join(INDEED_COLS)
+_indeed_vals_sql = ", ".join(f":{c}" for c in INDEED_COLS)
+
+INSERT_INDEED_JOB = text(f"""
+    WITH inserted AS (
+        INSERT INTO indeed_jobs ({_indeed_cols_sql})
+        VALUES ({_indeed_vals_sql})
+        ON CONFLICT (job_url) DO NOTHING
+        RETURNING id
+    )
+    SELECT id, false AS already_exists FROM inserted
+    UNION ALL
+    SELECT id, true AS already_exists FROM indeed_jobs
+     WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
+    LIMIT 1
+""").bindparams(*(bindparam(c, type_=JSONB) for c in INDEED_JSONB_COLS))
+
+
+GLASSDOOR_COLS = [
+    "job_url", "scan_run_id", "source_raw",  # JSONB
+    "listing_id", "goc_id", "job_country_id",
+    "job_title", "normalized_job_title",
+    "expired", "employer_active_status",
+    "is_easy_apply", "job_link", "seo_job_link",
+    "salary_currency", "salary_period", "salary_source",
+    "pay_period_adjusted_pay",  # JSONB
+    "location_name", "location",  # JSONB
+    "employer_name", "employer_overview",
+    "indeed_job_attribute",  # JSONB
+    "skills_labels",  # JSONB
+    "education_labels",  # JSONB
+    "job_description_plain",
+    "employer_benefits_overview", "employer_benefits_reviews",  # JSONB
+    "title",
+    "date_posted",
+    "valid_through",
+    "description",
+    "experience_requirements_description",
+    "experience_requirements_months",
+    "education_requirements_credential",
+    "employment_type",  # JSONB
+    "jsonld_salary_currency_top",
+    "jsonld_salary_currency",
+    "jsonld_salary_min",
+    "jsonld_salary_max",
+    "jsonld_salary_period",
+    "job_location",  # JSONB
+    "job_location_type",
+    "hiring_organization",  # JSONB
+    "industry",
+    "direct_apply",
+    "job_benefits",
+    "header_goc",
+    "job_type",  # JSONB
+    "job_type_keys",  # JSONB
+    "remote_work_types",  # JSONB
+    "header_expired",
+    "header_easy_apply",
+    "header_apply_url",
+    "header_salary_source",
+    "header_salary_currency",
+    "header_salary_period",
+    "header_employer",  # JSONB
+    "map_address",
+    "map_city_name",
+    "map_country",
+    "map_state_name",
+    "map_location_name",
+    "map_postal_code",
+    "map_employer",  # JSONB
+    "discover_date",
+    "job_title_text",
+    "jobview_job_description",
+]
+
+GLASSDOOR_JSONB_COLS = [
+    "source_raw",
+    "pay_period_adjusted_pay",
+    "location",
+    "indeed_job_attribute",
+    "skills_labels",
+    "education_labels",
+    "employer_benefits_reviews",
+    "employment_type",
+    "job_location",
+    "hiring_organization",
+    "job_type",
+    "job_type_keys",
+    "remote_work_types",
+    "header_employer",
+    "map_employer",
+]
+
+_glassdoor_cols_sql = ", ".join(GLASSDOOR_COLS)
+_glassdoor_vals_sql = ", ".join(f":{c}" for c in GLASSDOOR_COLS)
+
+INSERT_GLASSDOOR_JOB = text(f"""
+    WITH inserted AS (
+        INSERT INTO glassdoor_jobs ({_glassdoor_cols_sql})
+        VALUES ({_glassdoor_vals_sql})
+        ON CONFLICT (job_url) DO NOTHING
+        RETURNING id
+    )
+    SELECT id, false AS already_exists FROM inserted
+    UNION ALL
+    SELECT id, true AS already_exists FROM glassdoor_jobs
+     WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
+    LIMIT 1
+""").bindparams(*(bindparam(c, type_=JSONB) for c in GLASSDOOR_JSONB_COLS))
+
+
+def build_linkedin_params(body: ScrapedJobIngest) -> dict:
+    data = (body.source_raw or {}).get("data") or {}
+    included = (body.source_raw or {}).get("included")
+
+    title_entity = _resolve_linkedin_included(included, data.get("standardizedTitle"))
+    emp_entity = _resolve_linkedin_included(included, data.get("employmentStatus"))
+    company_urn = None
+    for v in (data.get("companyDetails") or {}).values():
+        if isinstance(v, dict) and isinstance(v.get("company"), str):
+            company_urn = v["company"]
+            break
+    company_entity = _resolve_linkedin_included(included, company_urn)
+
+    workplace_urns_raw = data.get("workplaceTypes")
+    workplace_urns = workplace_urns_raw if isinstance(workplace_urns_raw, list) else []
+    first_workplace_urn = workplace_urns[0] if workplace_urns else None
+    workplace_entity = _resolve_linkedin_included(included, first_workplace_urn)
+
+    si = data.get("salaryInsights") if isinstance(data.get("salaryInsights"), dict) else {}
+    cb = si.get("compensationBreakdown")
+    first_breakdown = (
+        cb[0]
+        if isinstance(cb, list) and cb and isinstance(cb[0], dict)
+        else {}
+    )
+    desc_block = data.get("description") if isinstance(data.get("description"), dict) else {}
+    apply_method = (
+        data.get("applyMethod") if isinstance(data.get("applyMethod"), dict) else None
+    )
+
+    return {
+        "job_url": data.get("jobPostingUrl"),
+        "scan_run_id": body.scan_run_id,
+        "source_raw": body.source_raw,
+        "job_posting_id": data.get("jobPostingId"),
+        "job_posting_url": data.get("jobPostingUrl"),
+        "listed_at": data.get("listedAt"),
+        "original_listed_at": data.get("originalListedAt"),
+        "job_state": data.get("jobState"),
+        "job_application_limit_reached": data.get("jobApplicationLimitReached"),
+        "expire_at": data.get("expireAt"),
+        "closed_at": data.get("closedAt"),
+        "formatted_location": data.get("formattedLocation"),
+        "country_urn": data.get("country"),
+        "location_urn": data.get("locationUrn"),
+        "location_visibility": data.get("locationVisibility"),
+        "postal_address": data.get("postalAddress"),
+        "standardized_addresses": data.get("standardizedAddresses"),
+        "job_region": data.get("jobRegion"),
+        "work_remote_allowed": data.get("workRemoteAllowed"),
+        "workplace_types_urns": data.get("workplaceTypes"),
+        "workplace_types_labels": data.get("workplaceTypesResolutionResults"),
+        "formatted_employment_status": data.get("formattedEmploymentStatus"),
+        "employment_status_urn": data.get("employmentStatus"),
+        "formatted_industries": data.get("formattedIndustries"),
+        "formatted_job_functions": data.get("formattedJobFunctions"),
+        "title": data.get("title"),
+        "standardized_title": (title_entity or {}).get("localizedName"),
+        "formatted_experience_level": data.get("formattedExperienceLevel"),
+        "skills_description": data.get("skillsDescription"),
+        "apply_method_type": _linkedin_apply_method_type(apply_method),
+        "company_apply_url": (
+            apply_method.get("companyApplyUrl") if apply_method else None
+        ),
+        "applicant_tracking_system": data.get("applicantTrackingSystem"),
+        "top_level_company_apply_url": data.get("companyApplyUrl"),
+        "salary_min": first_breakdown.get("minSalary"),
+        "salary_max": first_breakdown.get("maxSalary"),
+        "salary_currency": first_breakdown.get("currencyCode"),
+        "salary_period": first_breakdown.get("payPeriod"),
+        "salary_provided_by_employer": si.get("providedByEmployer"),
+        "description_text": desc_block.get("text"),
+        "inferred_benefits": data.get("inferredBenefits"),
+        "benefits": data.get("benefits"),
+        "company_name": (company_entity or {}).get("name"),
+        "company_universal_name": (company_entity or {}).get("universalName"),
+        "company_url": (company_entity or {}).get("url"),
+        "company_description": (company_entity or {}).get("description"),
+        "title_entity_urn": (title_entity or {}).get("entityUrn"),
+        "employment_status_label": (emp_entity or {}).get("localizedName"),
+        "employment_status_entity_urn": (emp_entity or {}).get("entityUrn"),
+        "workplace_type_entity_urn": (workplace_entity or {}).get("entityUrn"),
+    }
+
+
+def build_indeed_params(body: ScrapedJobIngest) -> dict:
+    mosaic = (body.source_raw or {}).get("mosaic") or {}
+    graphql = (body.source_raw or {}).get("graphql") or {}
+    mosaic_present = bool(mosaic)
+    graphql_present = bool(graphql)
+    if not (mosaic_present or graphql_present):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Indeed ingest has source_raw but both mosaic and graphql "
+                "blocks are null/missing"
+            ),
+        )
+
+    description_text = (graphql.get("description") or {}).get("text")
+
+    jk = mosaic.get("jobkey")
+    if jk is None and graphql_present:
+        jk = graphql.get("jobKey") or graphql.get("jobkey")
+    if jk is None or jk == "":
+        raise HTTPException(
+            status_code=400,
+            detail="Indeed ingest missing jobkey for job_url",
+        )
+    job_url = f"https://ca.indeed.com/viewjob?jk={jk}"
+
+    ext = (
+        mosaic.get("extractedSalary")
+        if isinstance(mosaic.get("extractedSalary"), dict)
+        else {}
+    )
+    snip = (
+        mosaic.get("salarySnippet")
+        if isinstance(mosaic.get("salarySnippet"), dict)
+        else {}
+    )
+    jsm = (
+        mosaic.get("jobSeekerMatchSummaryModel")
+        if isinstance(mosaic.get("jobSeekerMatchSummaryModel"), dict)
+        else {}
+    )
+
+    loc = graphql.get("location") if isinstance(graphql.get("location"), dict) else {}
+    formatted = (
+        loc.get("formatted") if isinstance(loc.get("formatted"), dict) else {}
+    )
+
+    emp = graphql.get("employer") if isinstance(graphql.get("employer"), dict) else {}
+    src = graphql.get("source") if isinstance(graphql.get("source"), dict) else {}
+    comp = (
+        graphql.get("compensation")
+        if isinstance(graphql.get("compensation"), dict)
+        else {}
+    )
+    base = comp.get("baseSalary") if isinstance(comp.get("baseSalary"), dict) else {}
+
+    return {
+        "job_url": job_url,
+        "scan_run_id": body.scan_run_id,
+        "source_raw": body.source_raw,
+        "mosaic_present": mosaic_present,
+        "graphql_present": graphql_present,
+        "jobkey": str(jk),
+        "link": mosaic.get("link"),
+        "view_job_link": mosaic.get("viewJobLink"),
+        "more_loc_url": mosaic.get("moreLocUrl"),
+        "third_party_apply_url": mosaic.get("thirdPartyApplyUrl"),
+        "pub_date": mosaic.get("pubDate"),
+        "create_date": mosaic.get("createDate"),
+        "expiration_date": mosaic.get("expirationDate"),
+        "expired": mosaic.get("expired"),
+        "title": mosaic.get("title"),
+        "display_title": mosaic.get("displayTitle"),
+        "norm_title": mosaic.get("normTitle"),
+        "job_types": mosaic.get("jobTypes"),
+        "taxonomy_attributes": mosaic.get("taxonomyAttributes"),
+        "formatted_location": mosaic.get("formattedLocation"),
+        "job_location_city": mosaic.get("jobLocationCity"),
+        "job_location_state": mosaic.get("jobLocationState"),
+        "job_location_postal": mosaic.get("jobLocationPostal"),
+        "location_count": mosaic.get("locationCount"),
+        "additional_location_link": mosaic.get("additionalLocationLink"),
+        "remote_location": mosaic.get("remoteLocation"),
+        "salary_min": ext.get("min"),
+        "salary_max": ext.get("max"),
+        "salary_period": ext.get("type"),
+        "salary_currency": snip.get("currency"),
+        "salary_text": snip.get("salaryTextFormatted"),
+        "salary_snippet_source": snip.get("source"),
+        "company": mosaic.get("company"),
+        "indeed_apply_enabled": mosaic.get("indeedApplyEnabled"),
+        "indeed_applyable": mosaic.get("indeedApplyable"),
+        "apply_count": mosaic.get("applyCount"),
+        "screener_questions_url": mosaic.get("screenerQuestionsURL"),
+        "match_negative_taxonomy": jsm.get("taxoEntityMatchesNegative"),
+        "match_mismatching_entities": jsm.get("sortedMisMatchingEntityDisplayText"),
+        "num_hires": mosaic.get("numHires"),
+        "employer_canonical_url": graphql.get("url"),
+        "graphql_date_published": _parse_iso_date(graphql.get("datePublished")),
+        "graphql_date_on_indeed": _parse_iso_date(graphql.get("dateOnIndeed")),
+        "graphql_expired": graphql.get("expired"),
+        "graphql_title": graphql.get("title"),
+        "graphql_normalized_title": graphql.get("normalizedTitle"),
+        "attributes": graphql.get("attributes"),
+        "location_formatted_long": formatted.get("long"),
+        "graphql_location_city": loc.get("city"),
+        "graphql_location_postal_code": loc.get("postalCode"),
+        "graphql_location_street_address": loc.get("streetAddress"),
+        "graphql_location_admin1_code": loc.get("admin1Code"),
+        "graphql_location_country_code": loc.get("countryCode"),
+        "description_text": description_text,
+        "language": graphql.get("language"),
+        "employer_name": emp.get("name"),
+        "employer_company_page_url": emp.get("relativeCompanyPageUrl"),
+        "source_name": src.get("name"),
+        "graphql_salary_period": base.get("unitOfWork"),
+    }
+
+
+def build_glassdoor_params(body: ScrapedJobIngest) -> dict:
+    jl = (body.source_raw or {}).get("jobListing") or {}
+    listing_id = jl.get("jobDetailsData", {}).get("listingId")
+    if not listing_id:
+        raise HTTPException(status_code=400, detail="Glassdoor ingest missing listing_id")
+    listing_id_str = str(listing_id)
+    job_url = (
+        f"https://www.glassdoor.ca/job-listing/listing-{listing_id_str}.htm"
+        f"?jl={listing_id_str}"
+    )
+
+    discover_date_raw = (
+        jl.get("jobDetailsRawData", {})
+        .get("jobview", {})
+        .get("job", {})
+        .get("discoverDate")
+    )
+    discover_date = _parse_glassdoor_discover_date(
+        discover_date_raw if isinstance(discover_date_raw, str) else None
+    )
+
+    jdd = jl.get("jobDetailsData", {})
+    jdd = jdd if isinstance(jdd, dict) else {}
+    indeed_attr = jdd.get("indeedJobAttribute")
+    indeed_attr = indeed_attr if isinstance(indeed_attr, dict) else {}
+
+    raw = body.source_raw or {}
+    jp = raw.get("json_ld")
+    jp = jp if isinstance(jp, dict) else {}
+    er = jp.get("experienceRequirements")
+    er = er if isinstance(er, dict) else {}
+    edreq = jp.get("educationRequirements")
+    edreq = edreq if isinstance(edreq, dict) else {}
+    bs = jp.get("baseSalary")
+    bs = bs if isinstance(bs, dict) else {}
+    bsval = bs.get("value")
+    bsval = bsval if isinstance(bsval, dict) else {}
+
+    jdrd = jl.get("jobDetailsRawData", {})
+    jdrd = jdrd if isinstance(jdrd, dict) else {}
+    jv = jdrd.get("jobview", {})
+    jv = jv if isinstance(jv, dict) else {}
+    header = jv.get("header", {})
+    header = header if isinstance(header, dict) else {}
+    mmap = jv.get("map", {})
+    mmap = mmap if isinstance(mmap, dict) else {}
+    jjob = jv.get("job", {})
+    jjob = jjob if isinstance(jjob, dict) else {}
+
+    return {
+        "job_url": job_url,
+        "scan_run_id": body.scan_run_id,
+        "source_raw": body.source_raw,
+        "listing_id": listing_id_str,
+        "goc_id": jdd.get("gocId"),
+        "job_country_id": jdd.get("jobCountryId"),
+        "job_title": jdd.get("jobTitle"),
+        "normalized_job_title": jdd.get("normalizedJobTitle"),
+        "expired": jdd.get("expired"),
+        "employer_active_status": jdd.get("employerActiveStatus"),
+        "is_easy_apply": jdd.get("isEasyApply"),
+        "job_link": jdd.get("jobLink"),
+        "seo_job_link": jdd.get("seoJobLink"),
+        "salary_currency": jdd.get("payCurrency"),
+        "salary_period": jdd.get("payPeriod"),
+        "salary_source": jdd.get("salarySource"),
+        "pay_period_adjusted_pay": jdd.get("payPeriodAdjustedPay"),
+        "location_name": jdd.get("locationName"),
+        "location": jdd.get("location"),
+        "employer_name": jdd.get("employerName"),
+        "employer_overview": jdd.get("employerOverview"),
+        "indeed_job_attribute": jdd.get("indeedJobAttribute"),
+        "skills_labels": indeed_attr.get("skillsLabel"),
+        "education_labels": indeed_attr.get("educationLabel"),
+        "job_description_plain": jdd.get("jobDescription"),
+        "employer_benefits_overview": jdd.get("employerBenefitsOverview"),
+        "employer_benefits_reviews": jdd.get("employerBenefitsReviews"),
+        "title": jp.get("title"),
+        "date_posted": _parse_iso_date(jp.get("datePosted")),
+        "valid_through": _parse_iso_date(jp.get("validThrough")),
+        "description": jp.get("description"),
+        "experience_requirements_description": er.get("description"),
+        "experience_requirements_months": er.get("monthsOfExperience"),
+        "education_requirements_credential": edreq.get("credentialCategory"),
+        "employment_type": jp.get("employmentType"),
+        "jsonld_salary_currency_top": jp.get("salaryCurrency"),
+        "jsonld_salary_currency": bs.get("currency"),
+        "jsonld_salary_min": bsval.get("minValue"),
+        "jsonld_salary_max": bsval.get("maxValue"),
+        "jsonld_salary_period": bsval.get("unitText"),
+        "job_location": jp.get("jobLocation"),
+        "job_location_type": jp.get("jobLocationType"),
+        "hiring_organization": jp.get("hiringOrganization"),
+        "industry": jp.get("industry"),
+        "direct_apply": jp.get("directApply"),
+        "job_benefits": jp.get("jobBenefits"),
+        "header_goc": header.get("goc"),
+        "job_type": header.get("jobType"),
+        "job_type_keys": header.get("jobTypeKeys"),
+        "remote_work_types": header.get("remoteWorkTypes"),
+        "header_expired": header.get("expired"),
+        "header_easy_apply": header.get("easyApply"),
+        "header_apply_url": header.get("applyUrl"),
+        "header_salary_source": header.get("salarySource"),
+        "header_salary_currency": header.get("payCurrency"),
+        "header_salary_period": header.get("payPeriod"),
+        "header_employer": header.get("employer"),
+        "map_address": mmap.get("address"),
+        "map_city_name": mmap.get("cityName"),
+        "map_country": mmap.get("country"),
+        "map_state_name": mmap.get("stateName"),
+        "map_location_name": mmap.get("locationName"),
+        "map_postal_code": mmap.get("postalCode"),
+        "map_employer": mmap.get("employer"),
+        "discover_date": discover_date,
+        "job_title_text": jjob.get("jobTitleText"),
+        "jobview_job_description": jjob.get("description"),
+    }
+
+
 @router.post("/ingest", response_model=ScrapedJobIngestResponse)
 async def ingest_job(
     body: ScrapedJobIngest,
@@ -78,7 +689,7 @@ async def ingest_job(
     try:
         if body.skip_reason:
             t_stage = monotonic()
-            data = body.model_dump(exclude_unset=False)
+            data = body.model_dump(exclude_unset=False, exclude={"source_raw"})
             data["job_url"] = None
             new_job = ScrapedJob(**data)
             new_job.ingest_source = "extension"
@@ -102,6 +713,113 @@ async def ingest_job(
                 content_duplicate=False,
                 skip_reason=body.skip_reason,
             )
+
+        if body.source_raw is None:
+            logger.info("ingest_transition_fallback %s", {"website": body.website})
+        else:
+            site = (body.website or "").strip().lower()
+            if site not in ("linkedin", "indeed", "glassdoor"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Unsupported website for per-source ingest: "
+                        f"{body.website!r}"
+                    ),
+                )
+            if body.scan_run_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="scan_run_id required for per-source ingest",
+                )
+            if site == "linkedin":
+                try:
+                    params = build_linkedin_params(body)
+                    if not params.get("job_url"):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="LinkedIn ingest missing jobPostingUrl",
+                        )
+                    result = await db.execute(INSERT_LINKEDIN_JOB, params)
+                    row = result.one()
+                    logger.info(
+                        "ingest_ok %s",
+                        {
+                            **log_context,
+                            "took_ms": int((monotonic() - t_start) * 1000),
+                            "path": "linkedin_jobs",
+                        },
+                    )
+                    return ScrapedJobIngestResponse(
+                        id=row.id,
+                        already_exists=row.already_exists,
+                        content_duplicate=False,
+                        skip_reason=None,
+                    )
+                except (AttributeError, TypeError) as e:
+                    logger.warning(
+                        "ingest_malformed_source_raw %s",
+                        {"website": body.website, "error": str(e)},
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Malformed source_raw for website={body.website}",
+                    ) from e
+            elif site == "indeed":
+                try:
+                    params = build_indeed_params(body)
+                    result = await db.execute(INSERT_INDEED_JOB, params)
+                    row = result.one()
+                    logger.info(
+                        "ingest_ok %s",
+                        {
+                            **log_context,
+                            "took_ms": int((monotonic() - t_start) * 1000),
+                            "path": "indeed_jobs",
+                        },
+                    )
+                    return ScrapedJobIngestResponse(
+                        id=row.id,
+                        already_exists=row.already_exists,
+                        content_duplicate=False,
+                        skip_reason=None,
+                    )
+                except (AttributeError, TypeError) as e:
+                    logger.warning(
+                        "ingest_malformed_source_raw %s",
+                        {"website": body.website, "error": str(e)},
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Malformed source_raw for website={body.website}",
+                    ) from e
+            elif site == "glassdoor":
+                try:
+                    params = build_glassdoor_params(body)
+                    result = await db.execute(INSERT_GLASSDOOR_JOB, params)
+                    row = result.one()
+                    logger.info(
+                        "ingest_ok %s",
+                        {
+                            **log_context,
+                            "took_ms": int((monotonic() - t_start) * 1000),
+                            "path": "glassdoor_jobs",
+                        },
+                    )
+                    return ScrapedJobIngestResponse(
+                        id=row.id,
+                        already_exists=row.already_exists,
+                        content_duplicate=False,
+                        skip_reason=None,
+                    )
+                except (AttributeError, TypeError) as e:
+                    logger.warning(
+                        "ingest_malformed_source_raw %s",
+                        {"website": body.website, "error": str(e)},
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Malformed source_raw for website={body.website}",
+                    ) from e
 
         t_dedup = monotonic()
         if body.job_url:
@@ -173,7 +891,7 @@ async def ingest_job(
             },
         )
 
-        payload = body.model_dump(exclude_unset=False)
+        payload = body.model_dump(exclude_unset=False, exclude={"source_raw"})
         payload.pop("original_job_id", None)
         if content_duplicate and content_dup_row is not None:
             payload["original_job_id"] = content_dup_row.id
@@ -211,6 +929,8 @@ async def ingest_job(
             content_duplicate=content_duplicate,
             skip_reason=resp_skip,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         total_ms = int((monotonic() - t_start) * 1000)
         logger.exception(

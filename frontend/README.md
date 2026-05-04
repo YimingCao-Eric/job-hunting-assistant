@@ -164,5 +164,5 @@ npm run lint
 
 ## See also
 
-- [Backend API](../backend/README.md) — endpoint reference
+- [Backend API](../backend/README.md) — endpoint reference and server logging (`docker compose logs backend`)
 - [Extension](../extension/README.md) — Chrome extension behavior

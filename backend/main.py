@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -90,6 +91,17 @@ async def lifespan(_app: FastAPI):
                 )
         shutdown_scheduler()
 
+
+# Backend logging — attach a stdout handler at INFO level so structured
+# ingest_* events (per step1-schema-design.md §10) surface in
+# `docker compose logs backend`. Without this, logger.info() calls are
+# discarded by the root logger's default WARNING level + missing handler.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
+    force=True,  # override any prior basicConfig (e.g. uvicorn-set defaults)
+)
 
 app = FastAPI(title="Job Hunting Assistant API", lifespan=lifespan)
 

@@ -19,7 +19,7 @@ For full-stack setup (Docker, extension, web UI), see the [repository root READM
 
 ```
 backend/
-├── main.py              FastAPI app, CORS, /health, lifespan (migrations, Redis subscriber, auto-scrape cycle cleanup, scheduler)
+├── main.py              FastAPI app, CORS, /health, lifespan (migrations, Redis subscriber, auto-scrape cycle cleanup, scheduler); **`logging.basicConfig`** on stdout at **INFO** so router/app logs show in `docker compose logs backend`
 ├── core/
 │   ├── auto_scrape_lifecycle.py  Startup: mark stale auto-scrape cycles failed; reset **`auto_scrape_state.cycle_phase`** to **`idle`** when rows are cleaned
 │   ├── auto_scrape_validation.py  Orchestrator config limits + validate()
@@ -258,6 +258,12 @@ Or from `backend/` with `DATABASE_URL` and API reachable:
 ```bash
 python smoke_test.py
 ```
+
+## Logging
+
+On import, **`main.py`** calls **`logging.basicConfig(..., level=INFO, stream=sys.stdout, force=True)`** so the root logger has a handler and **INFO** records from modules such as **`routers.jobs`** (ingest diagnostics) are visible in Docker and terminal output. Uvicorn’s own lines use its default formatting; everything else uses the configured `%(asctime)s %(levelname)s %(name)s: %(message)s` pattern.
+
+Per-logger levels are also set near the top of **`main.py`** (e.g. **`routers.jobs`** at INFO, matching loggers at DEBUG) before **`basicConfig`** runs; child loggers propagate records to the configured root handler.
 
 ## Development notes
 
