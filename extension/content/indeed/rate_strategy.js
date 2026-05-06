@@ -20,8 +20,45 @@ async function _strategy6(jk, apiKey) {
         "indeed-co": "CA",
       },
       body: JSON.stringify({
-        query: `query { jobData(input: { jobKeys: [${JSON.stringify(jk)}] }) {
-          results { job { title description { text html } } } } }`,
+        query: `
+query JobDetail {
+  jobData(input: { jobKeys: [${JSON.stringify(jk)}] }) {
+    results {
+      job {
+        key
+        title
+        url
+        datePublished
+        dateOnIndeed
+        expired
+        normalizedTitle
+        attributes { key label }
+        location {
+          formatted { long short }
+          city
+          postalCode
+          streetAddress
+          admin1Code
+          countryCode
+        }
+        description { text }
+        language
+        employer {
+          name
+          relativeCompanyPageUrl
+        }
+        source { name }
+        compensation {
+          baseSalary {
+            unitOfWork
+            range { __typename ... on Range { min max } }
+          }
+        }
+      }
+    }
+  }
+}
+`.trim(),
       }),
       signal: controller.signal,
     });

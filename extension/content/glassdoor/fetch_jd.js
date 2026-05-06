@@ -161,21 +161,193 @@ function getListingIdFromUrl(url) {
 }
 
 /**
+ * Extract a balanced JSON object or array starting at startIdx (first char `{` or `[`).
+ */
+function extractBalancedJsonFragment(html, startIdx) {
+  const pairs = { "{": "}", "[": "]" };
+  const openChars = new Set(["{", "["]);
+  const stack = [];
+  let inStr = false;
+  let esc = false;
+  let quote = null;
+
+  for (let j = startIdx; j < html.length; j++) {
+    const c = html[j];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === quote) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inStr = true;
+      quote = c;
+      continue;
+    }
+    if (openChars.has(c)) {
+      stack.push(c);
+      continue;
+    }
+    if (c === "}" || c === "]") {
+      if (!stack.length) return null;
+      const top = stack.pop();
+      if (pairs[top] !== c) return null;
+      if (!stack.length) {
+        return html.slice(startIdx, j + 1);
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Find `"key":` and JSON-parse the following `{...}` or `[...]` value (first match that parses).
+ */
+function extractJsonObjectAfterKey(html, key) {
+  const needle = `"${key}"`;
+  let searchStart = 0;
+  while (searchStart < html.length) {
+    const pos = html.indexOf(needle, searchStart);
+    if (pos === -1) return null;
+    let i = pos + needle.length;
+    while (i < html.length && /\s/.test(html[i])) i++;
+    if (html[i] !== ":") {
+      searchStart = pos + needle.length;
+      continue;
+    }
+    i++;
+    while (i < html.length && /\s/.test(html[i])) i++;
+    const frag = extractBalancedJsonFragment(html, i);
+    if (!frag || (frag[0] !== "{" && frag[0] !== "[")) {
+      searchStart = pos + needle.length;
+      continue;
+    }
+    try {
+      return JSON.parse(frag);
+    } catch {
+      searchStart = pos + needle.length;
+    }
+  }
+  return null;
+}
+
+/**
+ * __next_f chunks look like: self.__next_f.push([1,"...JSON-encoded string..."])
+ * Collect every quoted string inside those push() calls and JSON-parse it (un-escapes).
+ */
+function extractRscEncodedString(html) {
+  const decoded = [];
+  const re =
+    /__next_f\.push\(\s*\[\s*\d+\s*,\s*("(?:\\.|[^"\\])*")\s*\]\s*\)/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const jsonStringLiteral = m[1];
+    try {
+      decoded.push(JSON.parse(jsonStringLiteral));
+    } catch {
+      /* skip malformed chunk */
+    }
+  }
+  return decoded;
+}
+
+/**
+ * Walk raw HTML + decoded RSC flight chunks for embedded job payload.
+ * Pass 1: unescaped `"jobViewPage":{` / `"jobListing":{` (SSR / legacy).
+ * Pass 2: JS-decoded strings from __next_f.push — escaped `\"jobViewPage\"` in HTML.
+ */
+function extractGlassdoorJobRootFromHtml(html) {
+  if (typeof html !== "string" || !html.length) return null;
+
+  const direct =
+    extractJsonObjectAfterKey(html, "jobViewPage") ||
+    extractJsonObjectAfterKey(html, "jobListing");
+  if (direct && typeof direct === "object") {
+    return direct;
+  }
+
+  const chunks = extractRscEncodedString(html);
+  for (const chunk of chunks) {
+    if (typeof chunk !== "string" || chunk.length < 50) continue;
+    const found =
+      extractJsonObjectAfterKey(chunk, "jobViewPage") ||
+      extractJsonObjectAfterKey(chunk, "jobListing");
+    if (found && typeof found === "object") return found;
+  }
+  return null;
+}
+
+/**
+ * Backend expects sibling keys jobListing.jobDetailsData and jobListing.jobDetailsRawData.
+ * Live jobViewPage nests raw under jobDetailsData — hoist when needed.
+ * Ensure jobDetailsData.listingId for ingest (top-level or jobview.job.listingId).
+ */
+function ensureBackendGlassdoorListingShape(jobListingRoot, jlFromUrl) {
+  if (!jobListingRoot || typeof jobListingRoot !== "object") return jobListingRoot;
+
+  const jdd = jobListingRoot.jobDetailsData;
+  if (!jdd || typeof jdd !== "object") return jobListingRoot;
+
+  const topRaw = jobListingRoot.jobDetailsRawData;
+  const nestedRaw = jdd.jobDetailsRawData;
+
+  const jobDetailsRawData =
+    topRaw && typeof topRaw === "object"
+      ? topRaw
+      : nestedRaw && typeof nestedRaw === "object"
+        ? nestedRaw
+        : {};
+
+  const needsRawHoist =
+    (!topRaw || typeof topRaw !== "object") &&
+    nestedRaw &&
+    typeof nestedRaw === "object";
+
+  const listingFromJv = jobDetailsRawData?.jobview?.job?.listingId;
+
+  const resolvedListing =
+    jdd.listingId ?? listingFromJv ?? jlFromUrl ?? undefined;
+
+  const jobDetailsData =
+    resolvedListing !== undefined ? { ...jdd, listingId: resolvedListing } : jdd;
+
+  if (
+    !needsRawHoist &&
+    jobDetailsData === jdd &&
+    resolvedListing === jdd.listingId
+  ) {
+    return jobListingRoot;
+  }
+
+  return {
+    ...jobListingRoot,
+    jobDetailsData,
+    ...(needsRawHoist ? { jobDetailsRawData } : {}),
+  };
+}
+
+/**
  * source_raw for Glassdoor ingest — listing_id required (backend 400 otherwise).
- * Path 1: __NEXT_DATA__ jobListing (legacy). Path 2: RSC pages — ?jl= + JSON-LD only.
+ * Path 1: RSC/HTML embedded jobViewPage or jobListing. Path 2: __NEXT_DATA__ jobListing.
+ * Path 3: ?jl= + JSON-LD stub only.
  */
 function buildGlassdoorSourceRaw(jobListingSubtree, jsonLd, fetchedUrl) {
-  const ndListingId = jobListingSubtree?.jobDetailsData?.listingId;
+  const urlJl = getListingIdFromUrl(fetchedUrl || "");
+  let jl =
+    jobListingSubtree && typeof jobListingSubtree === "object"
+      ? ensureBackendGlassdoorListingShape(jobListingSubtree, urlJl)
+      : jobListingSubtree;
+
+  const ndListingId = jl?.jobDetailsData?.listingId;
   if (ndListingId) {
     return {
-      jobListing: jobListingSubtree,
+      jobListing: jl,
       json_ld: jsonLd ?? null,
     };
   }
-  const urlListingId = getListingIdFromUrl(fetchedUrl || "");
-  if (urlListingId && jsonLd) {
+  if (urlJl && jsonLd) {
     return {
-      jobListing: { jobDetailsData: { listingId: urlListingId } },
+      jobListing: { jobDetailsData: { listingId: urlJl } },
       json_ld: jsonLd,
     };
   }
@@ -275,11 +447,13 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       const html = await res.text();
       const doc = new DOMParser().parseFromString(html, "text/html");
       const nextData = parseGlassdoorNextData(html);
+      const fromEmbedded = extractGlassdoorJobRootFromHtml(html);
       const jobListingSubtree =
-        nextData?.props?.pageProps?.jobListing &&
+        fromEmbedded ||
+        (nextData?.props?.pageProps?.jobListing &&
         typeof nextData.props.pageProps.jobListing === "object"
           ? nextData.props.pageProps.jobListing
-          : null;
+          : null);
       const jsonLdForSourceRaw = extractGlassdoorJobPostingJsonLd(doc);
       const glassdoorSourceRaw = buildGlassdoorSourceRaw(
         jobListingSubtree,
@@ -320,10 +494,14 @@ async function fetchGlassdoorJD(jobUrl, jl) {
       if (!hasJdText(jd) && nextData) {
         try {
           const desc =
+            nextData?.props?.pageProps?.jobListing?.jobDetailsRawData?.jobview
+              ?.job?.description ||
             nextData?.props?.pageProps?.jobListing?.jobview?.job?.description ||
             nextData?.props?.pageProps?.jobListing?.jobview?.job?.descriptionFragments?.join(
               "\n"
             ) ||
+            nextData?.props?.pageProps?.jobViewPage?.jobDetailsData
+              ?.jobDetailsRawData?.jobview?.job?.description ||
             nextData?.props?.pageProps?.jobDetail?.jobDescription ||
             nextData?.props?.pageProps?.job?.description ||
             null;

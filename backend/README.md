@@ -44,6 +44,7 @@ backend/
 │   ├── config.py        GET/PUT /config
 │   ├── extension.py      State, scan/stop triggers, run logs, session errors, sync-dedup on run complete, **`broadcast_run_log_update`**
 │   ├── auto_scrape.py   **`/admin/auto-scrape`** — state, config, cycles, sessions, enable/pause/shutdown, heartbeat, instances, wake-orchestrator, …
+│   ├── admin_cleanup.py **`POST /admin/cleanup-invalid-entries`** — bearer auth; trims bad scraped rows / stale logs (see router)
 │   ├── run_log_ws.py    **`WebSocket /ws/run-log`** — fan-out run-log updates (`bearer` subprotocol auth)
 │   └── dedup.py         GET dedup reports; POST /dedup/reports/{id}/debug; POST /jobs/dedup, /reset, /resolve-chains
 ├── auto_scrape/         **`post_scrape_orchestrator`** — optional Redis subscriber + post-scrape cycle claims (extension also uses **APScheduler** in `main.py` when configured)
@@ -60,10 +61,12 @@ Variables are read from a `.env` file (see [`.env.example`](../.env.example) at 
 | Variable | Description |
 | --- | --- |
 | `DATABASE_URL` | Async SQLAlchemy URL, e.g. `postgresql+asyncpg://user:pass@host:5432/db` |
-| `CONFIG_PATH` | Path to `config.json` (default `/app/config.json` in Docker) |
+| `CONFIG_PATH` | Path to `config.json` (default `/app/data/config.json`; host **`./data`** bind mount in Compose) |
+| `PROFILE_PATH` | Path to persisted profile JSON (default **`/app/data/profile.json`**; same `./data` mount) |
 | `EXTENSION_ORIGIN_REGEX` | Optional; reserved for stricter extension-origin checks |
+| `DEDUP_COSINE_BATCH_SIZE` | Batch size hint for cosine dedup (default **1000** — see `core/config.py`) |
 | `OPENAI_API_KEY` | Optional; required when running LLM extraction/gates or **`llm_score`** if `llm` is enabled (see repo root `.env.example`) |
-| `REDIS_URL` | Optional; when set, enables the post-scrape **`wake-orchestrator`** subscriber (`auto_scrape/post_scrape_orchestrator.py`). Compose can run a Redis service when configured in `.env` |
+| `REDIS_URL` | Optional for bare-metal; repo **`docker-compose.yml` sets **`REDIS_URL=redis://redis:6379/0`**, enabling the **`redis_subscriber`** in **`main.py`**. Omit only when intentionally running Redis-free |
 | `DEBUG_LOG_RING_SIZE` | Optional; max events per run **`debug_log`** ring buffer (default **10000**; see `core/config.py`) |
 
 When using **Docker Compose** from the repo root, `DATABASE_URL` typically points at the `postgres` service hostname.
@@ -77,7 +80,7 @@ cp .env.example .env   # adjust if needed
 docker compose up --build -d
 ```
 
-The API listens on **http://localhost:8000**. Migrations apply on startup.
+The API listens on **http://localhost:8000**. **Redis** (port **6379** on the host), **Postgres**, and **`./data` → `/app/data`** (config + profile files) apply as configured in Compose. Migrations apply on startup.
 
 ```bash
 curl http://localhost:8000/health
@@ -225,6 +228,12 @@ Bearer-authenticated **admin** API for the Chrome extension **auto-scrape orches
 | `POST` | `/admin/auto-scrape/wake-orchestrator` | Redis publish to nudge post-scrape worker (best-effort) |
 
 Implementation: **`routers/auto_scrape.py`**. Post-scrape pipeline steps may be simplified in some deployments; **`REDIS_URL`** enables the subscriber in **`auto_scrape/post_scrape_orchestrator.py`**.
+
+### Admin maintenance (`/admin`)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/admin/cleanup-invalid-entries` | Deletes scraped jobs with unusable mandatory fields / short descriptions (older rows) / unsupported `website`, marks briefly-stale **`extension_run_logs`** and **`dedup_tasks`** failed (**`CleanupInvalidEntriesResponse`** — see **`routers/admin_cleanup.py`**). Bearer auth required. |
 
 ### Extension (`/extension`)
 

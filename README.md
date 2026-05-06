@@ -14,7 +14,7 @@ frontend/           Vite + React (Router), CSS modules + Tailwind for auto-scrap
   └── Routes: /, /profile, /jobs, /logs, /skills, /matching, /dedup, **/dashboard/auto-scrape** (see frontend/README.md)
 
 backend/            FastAPI + SQLAlchemy async + PostgreSQL; optional **Redis** (post-scrape wake when `REDIS_URL` set)
-  ├── routers/          /jobs, /config, /extension, /dedup, /match/*, /profile, /skills, **/admin/auto-scrape**, /ws/run-log, …
+  ├── routers/          /jobs, /config, /extension, /dedup, /match/*, /profile, /skills, **/admin/auto-scrape**, **/admin/cleanup-invalid-entries**, /ws/run-log, …
   ├── auto_scrape/      Post-scrape subscriber (Redis wake; APScheduler fallback)
   ├── dedup/            Pass 0/1/2 pipeline (hash + cosine), chain resolution, dedup reports
   ├── matching/         CPU/LLM JD extraction, gates, CPU pre-score, optional LLM re-score; pipeline stages for /jobs/match
@@ -23,7 +23,7 @@ backend/            FastAPI + SQLAlchemy async + PostgreSQL; optional **Redis** 
   ├── schemas/          Pydantic v2 request/response models
   └── core/             Config file, database, auth, **`trace`** (in-memory pipeline debug buffer + stdlib log bridge), **`dedup_task_cleanup`** (startup)
 
-docker-compose.yml  Backend + Postgres 16 (+ **Redis** if enabled in `.env`)
+docker-compose.yml  Backend + Postgres 16 + **Redis 7**; host **`./data`** mounted at **`/app/data`** so `config.json` and `profile.json` survive rebuilds (**`CONFIG_PATH`**, **`PROFILE_PATH`**)
 ```
 
 ## Quick Start
@@ -44,8 +44,9 @@ This launches:
 
 - **FastAPI** on `http://localhost:8000`
 - **PostgreSQL 16** with database `jha`
+- **Redis 7** on host port **6379** (Compose sets **`REDIS_URL=redis://redis:6379/0`** so the post-scrape subscriber runs when backend starts)
 
-Migrations run automatically on startup.
+The backend container mounts **`./data` → `/app/data`** (create the folder beforehand if you want fixed permissions on Linux). Migrations run automatically on startup.
 
 **Backend logs:** Application loggers (including ingest routes under `routers.jobs`) emit **INFO** and above to **stdout** with a timestamped format configured in `backend/main.py`, so they appear in Compose output:
 
@@ -145,11 +146,13 @@ Search parameters live in `config.json` (path set by `CONFIG_PATH` in Docker). E
 | Variable | Description |
 | --- | --- |
 | `DATABASE_URL` | Async PostgreSQL connection string |
-| `CONFIG_PATH` | Path to `config.json` inside the container |
+| `CONFIG_PATH` | Path to `config.json` (default **`/app/data/config.json`** in Compose) |
+| `PROFILE_PATH` | Path to persisted profile JSON (default **`/app/data/profile.json`** in Compose) |
 | `EXTENSION_ORIGIN_REGEX` | Regex to validate Chrome extension origin header |
+| `DEDUP_COSINE_BATCH_SIZE` | Optional batch size hint for cosine dedup (**`dedup_cosine_batch_size`** in settings; default **1000**) |
 | `OPENAI_API_KEY` | Optional; required for LLM JD extraction, LLM scoring (Button 4), and LLM resume/profile features when `llm` is enabled (see `.env.example`) |
 | `DEBUG_LOG_RING_SIZE` | Optional; max events kept per **`debug_log`** (extension run logs, dedup reports, match reports). Default **10000** (see `core/config.py`). |
-| `REDIS_URL` | Optional; when set, backend subscribes to Redis for **post-scrape** orchestration nudges (`/admin/auto-scrape/wake-orchestrator`). Enable Redis in **docker-compose** via `.env` when you need that path |
+| `REDIS_URL` | When set (repo **Docker Compose always sets this**), the backend starts the Redis **post-scrape** subscriber (`/admin/auto-scrape/wake-orchestrator` publishes become effective). Omit for bare-metal/local runs if you do not run Redis |
 
 ## API Endpoints
 
@@ -229,6 +232,12 @@ Admin routes for the **extension-driven** auto-scrape orchestrator (bearer auth)
 | `POST` | `/admin/auto-scrape/reset-session/{site}` | Reset failure counters for a site |
 
 See **`routers/auto_scrape.py`** for the full list (cycle CRUD, wake-orchestrator, cleanup, etc.).
+
+### Admin maintenance (`/admin`)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/admin/cleanup-invalid-entries` | Deletes scraped rows with unusable titles/companies/job descriptions or bad `website`, marks short-timeout stale **`extension_run_logs`** / **`dedup_tasks`** failed. Bearer auth (see **`routers/admin_cleanup.py`**). |
 
 ### `GET /jobs` response shape (high level)
 

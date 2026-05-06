@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from time import monotonic
@@ -119,6 +120,28 @@ def _parse_iso_date(raw):
         return None
 
 
+def _parse_indeed_date(v):
+    """Indeed sends DATE-bound fields as either epoch ms (int) or ISO
+    string. _parse_iso_date alone returns None for ints; this helper
+    handles both."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        # bool is a subclass of int in Python; reject explicitly so
+        # accidental boolean values don't become 1970-01-01.
+        return None
+    if isinstance(v, int):
+        from datetime import datetime, timezone
+
+        try:
+            return datetime.fromtimestamp(v / 1000, tz=timezone.utc).date()
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(v, str):
+        return _parse_iso_date(v)
+    return None
+
+
 def _to_str_or_none(v):
     """Coerce ints/floats to str for VARCHAR columns. Pass through
     strings and None unchanged. asyncpg won't auto-coerce numeric →
@@ -156,6 +179,19 @@ def _to_int_or_none(v):
             except (ValueError, TypeError):
                 return None
     return None
+
+
+def _jsonb_or_null(v):
+    """Coerce empty/sentinel values to None so the DB driver writes SQL NULL.
+    Apply this wrapper before assigning to any JSONB column. Do NOT json.dumps()
+    the result — let the asyncpg JSONB codec serialize."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (list, dict)) and len(v) == 0:
+        return None
+    return v
 
 
 def _linkedin_apply_method_type(apply_method: dict | None) -> str | None:
@@ -229,7 +265,7 @@ INSERT_LINKEDIN_JOB = text(f"""
     SELECT id, true AS already_exists FROM linkedin_jobs
      WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
-""").bindparams(*(bindparam(c, type_=JSONB) for c in LINKEDIN_JSONB_COLS))
+""").bindparams(*(bindparam(c, type_=JSONB(none_as_null=True)) for c in LINKEDIN_JSONB_COLS))
 
 
 INDEED_COLS = [
@@ -288,7 +324,7 @@ INSERT_INDEED_JOB = text(f"""
     SELECT id, true AS already_exists FROM indeed_jobs
      WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
-""").bindparams(*(bindparam(c, type_=JSONB) for c in INDEED_JSONB_COLS))
+""").bindparams(*(bindparam(c, type_=JSONB(none_as_null=True)) for c in INDEED_JSONB_COLS))
 
 
 GLASSDOOR_COLS = [
@@ -381,7 +417,7 @@ INSERT_GLASSDOOR_JOB = text(f"""
     SELECT id, true AS already_exists FROM glassdoor_jobs
      WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
-""").bindparams(*(bindparam(c, type_=JSONB) for c in GLASSDOOR_JSONB_COLS))
+""").bindparams(*(bindparam(c, type_=JSONB(none_as_null=True)) for c in GLASSDOOR_JSONB_COLS))
 
 
 def build_linkedin_params(body: ScrapedJobIngest) -> dict:
@@ -422,6 +458,12 @@ def build_linkedin_params(body: ScrapedJobIngest) -> dict:
         data.get("applyMethod") if isinstance(data.get("applyMethod"), dict) else None
     )
 
+    sd = data.get("skillsDescription")
+    if isinstance(sd, dict):
+        sd_text = sd.get("text")
+    else:
+        sd_text = sd
+
     return {
         "job_url": _to_str_or_none(data.get("jobPostingUrl")),
         "scan_run_id": body.scan_run_id,
@@ -438,18 +480,20 @@ def build_linkedin_params(body: ScrapedJobIngest) -> dict:
         "country_urn": _to_str_or_none(data.get("country")),
         "location_urn": _to_str_or_none(data.get("locationUrn")),
         "location_visibility": _to_str_or_none(data.get("locationVisibility")),
-        "postal_address": data.get("postalAddress"),
-        "standardized_addresses": data.get("standardizedAddresses"),
+        "postal_address": _jsonb_or_null(data.get("postalAddress")),
+        "standardized_addresses": _jsonb_or_null(data.get("standardizedAddresses")),
         "job_region": _to_str_or_none(data.get("jobRegion")),
         "work_remote_allowed": data.get("workRemoteAllowed"),
-        "workplace_types_urns": data.get("workplaceTypes"),
-        "workplace_types_labels": data.get("workplaceTypesResolutionResults"),
+        "workplace_types_urns": _jsonb_or_null(data.get("workplaceTypes")),
+        "workplace_types_labels": _jsonb_or_null(
+            data.get("workplaceTypesResolutionResults")
+        ),
         "formatted_employment_status": _to_str_or_none(
             data.get("formattedEmploymentStatus")
         ),
         "employment_status_urn": _to_str_or_none(data.get("employmentStatus")),
-        "formatted_industries": data.get("formattedIndustries"),
-        "formatted_job_functions": data.get("formattedJobFunctions"),
+        "formatted_industries": _jsonb_or_null(data.get("formattedIndustries")),
+        "formatted_job_functions": _jsonb_or_null(data.get("formattedJobFunctions")),
         "title": _to_str_or_none(data.get("title")),
         "standardized_title": _to_str_or_none(
             (title_entity or {}).get("localizedName")
@@ -457,7 +501,7 @@ def build_linkedin_params(body: ScrapedJobIngest) -> dict:
         "formatted_experience_level": _to_str_or_none(
             data.get("formattedExperienceLevel")
         ),
-        "skills_description": _to_str_or_none(data.get("skillsDescription")),
+        "skills_description": _to_str_or_none(sd_text),
         "apply_method_type": _to_str_or_none(
             _linkedin_apply_method_type(apply_method)
         ),
@@ -474,8 +518,8 @@ def build_linkedin_params(body: ScrapedJobIngest) -> dict:
         "salary_period": _to_str_or_none(first_breakdown.get("payPeriod")),
         "salary_provided_by_employer": si.get("providedByEmployer"),
         "description_text": _to_str_or_none(desc_block.get("text")),
-        "inferred_benefits": data.get("inferredBenefits"),
-        "benefits": data.get("benefits"),
+        "inferred_benefits": _jsonb_or_null(data.get("inferredBenefits")),
+        "benefits": _jsonb_or_null(data.get("benefits")),
         "company_name": _to_str_or_none((company_entity or {}).get("name")),
         "company_universal_name": _to_str_or_none(
             (company_entity or {}).get("universalName")
@@ -557,6 +601,8 @@ def build_indeed_params(body: ScrapedJobIngest) -> dict:
     )
     base = comp.get("baseSalary") if isinstance(comp.get("baseSalary"), dict) else {}
 
+    stf = snip.get("salaryTextFormatted")
+
     return {
         "job_url": job_url,
         "scan_run_id": body.scan_run_id,
@@ -575,8 +621,8 @@ def build_indeed_params(body: ScrapedJobIngest) -> dict:
         "title": _to_str_or_none(mosaic.get("title")),
         "display_title": _to_str_or_none(mosaic.get("displayTitle")),
         "norm_title": _to_str_or_none(mosaic.get("normTitle")),
-        "job_types": mosaic.get("jobTypes"),
-        "taxonomy_attributes": mosaic.get("taxonomyAttributes"),
+        "job_types": _jsonb_or_null(mosaic.get("jobTypes")),
+        "taxonomy_attributes": _jsonb_or_null(mosaic.get("taxonomyAttributes")),
         "formatted_location": _to_str_or_none(mosaic.get("formattedLocation")),
         "job_location_city": _to_str_or_none(mosaic.get("jobLocationCity")),
         "job_location_state": _to_str_or_none(mosaic.get("jobLocationState")),
@@ -588,23 +634,25 @@ def build_indeed_params(body: ScrapedJobIngest) -> dict:
         "salary_max": ext.get("max"),
         "salary_period": _to_str_or_none(ext.get("type")),
         "salary_currency": _to_str_or_none(snip.get("currency")),
-        "salary_text": _to_str_or_none(snip.get("salaryTextFormatted")),
+        "salary_text": stf if isinstance(stf, str) else None,
         "salary_snippet_source": _to_str_or_none(snip.get("source")),
         "company": _to_str_or_none(mosaic.get("company")),
         "indeed_apply_enabled": mosaic.get("indeedApplyEnabled"),
         "indeed_applyable": mosaic.get("indeedApplyable"),
         "apply_count": _to_int_or_none(mosaic.get("applyCount")),
         "screener_questions_url": _to_str_or_none(mosaic.get("screenerQuestionsURL")),
-        "match_negative_taxonomy": jsm.get("taxoEntityMatchesNegative"),
-        "match_mismatching_entities": jsm.get("sortedMisMatchingEntityDisplayText"),
+        "match_negative_taxonomy": _jsonb_or_null(jsm.get("taxoEntityMatchesNegative")),
+        "match_mismatching_entities": _jsonb_or_null(
+            jsm.get("sortedMisMatchingEntityDisplayText")
+        ),
         "num_hires": _to_int_or_none(mosaic.get("numHires")),
         "employer_canonical_url": _to_str_or_none(graphql.get("url")),
-        "graphql_date_published": _parse_iso_date(graphql.get("datePublished")),
-        "graphql_date_on_indeed": _parse_iso_date(graphql.get("dateOnIndeed")),
+        "graphql_date_published": _parse_indeed_date(graphql.get("datePublished")),
+        "graphql_date_on_indeed": _parse_indeed_date(graphql.get("dateOnIndeed")),
         "graphql_expired": graphql.get("expired"),
         "graphql_title": _to_str_or_none(graphql.get("title")),
         "graphql_normalized_title": _to_str_or_none(graphql.get("normalizedTitle")),
-        "attributes": graphql.get("attributes"),
+        "attributes": _jsonb_or_null(graphql.get("attributes")),
         "location_formatted_long": _to_str_or_none(formatted.get("long")),
         "graphql_location_city": _to_str_or_none(loc.get("city")),
         "graphql_location_postal_code": _to_str_or_none(loc.get("postalCode")),
@@ -643,8 +691,6 @@ def build_glassdoor_params(body: ScrapedJobIngest) -> dict:
 
     jdd = jl.get("jobDetailsData", {})
     jdd = jdd if isinstance(jdd, dict) else {}
-    indeed_attr = jdd.get("indeedJobAttribute")
-    indeed_attr = indeed_attr if isinstance(indeed_attr, dict) else {}
 
     raw = body.source_raw or {}
     jp = raw.get("json_ld")
@@ -664,10 +710,25 @@ def build_glassdoor_params(body: ScrapedJobIngest) -> dict:
     jv = jv if isinstance(jv, dict) else {}
     header = jv.get("header", {})
     header = header if isinstance(header, dict) else {}
+    ija = header.get("indeedJobAttribute")
+    ija = ija if isinstance(ija, dict) else {}
     mmap = jv.get("map", {})
     mmap = mmap if isinstance(mmap, dict) else {}
     jjob = jv.get("job", {})
     jjob = jjob if isinstance(jjob, dict) else {}
+
+    moe = er.get("monthsOfExperience")
+    if moe in (None, "", "0", 0):
+        experience_requirements_months = None
+    else:
+        experience_requirements_months = _to_int_or_none(moe)
+
+    employer_overview_val = _jsonb_or_null(jdd.get("employerOverview"))
+    employer_overview_text = (
+        json.dumps(employer_overview_val)
+        if employer_overview_val is not None
+        else None
+    )
 
     return {
         "job_url": job_url,
@@ -686,58 +747,56 @@ def build_glassdoor_params(body: ScrapedJobIngest) -> dict:
         "salary_currency": _to_str_or_none(jdd.get("payCurrency")),
         "salary_period": _to_str_or_none(jdd.get("payPeriod")),
         "salary_source": _to_str_or_none(jdd.get("salarySource")),
-        "pay_period_adjusted_pay": jdd.get("payPeriodAdjustedPay"),
+        "pay_period_adjusted_pay": _jsonb_or_null(jdd.get("payPeriodAdjustedPay")),
         "location_name": _to_str_or_none(jdd.get("locationName")),
-        "location": jdd.get("location"),
+        "location": _jsonb_or_null(jdd.get("location")),
         "employer_name": _to_str_or_none(jdd.get("employerName")),
-        "employer_overview": _to_str_or_none(jdd.get("employerOverview")),
-        "indeed_job_attribute": jdd.get("indeedJobAttribute"),
-        "skills_labels": indeed_attr.get("skillsLabel"),
-        "education_labels": indeed_attr.get("educationLabel"),
+        "employer_overview": employer_overview_text,
+        "indeed_job_attribute": _jsonb_or_null(ija),
+        "skills_labels": _jsonb_or_null(ija.get("skillsLabel")),
+        "education_labels": _jsonb_or_null(ija.get("educationLabel")),
         "job_description_plain": _to_str_or_none(jdd.get("jobDescription")),
         "employer_benefits_overview": _to_str_or_none(jdd.get("employerBenefitsOverview")),
-        "employer_benefits_reviews": jdd.get("employerBenefitsReviews"),
+        "employer_benefits_reviews": _jsonb_or_null(jdd.get("employerBenefitsReviews")),
         "title": _to_str_or_none(jp.get("title")),
         "date_posted": _parse_iso_date(jp.get("datePosted")),
         "valid_through": _parse_iso_date(jp.get("validThrough")),
         "description": _to_str_or_none(jp.get("description")),
         "experience_requirements_description": _to_str_or_none(er.get("description")),
-        "experience_requirements_months": _to_int_or_none(
-            er.get("monthsOfExperience")
-        ),
+        "experience_requirements_months": experience_requirements_months,
         "education_requirements_credential": _to_str_or_none(
             edreq.get("credentialCategory")
         ),
-        "employment_type": jp.get("employmentType"),
+        "employment_type": _jsonb_or_null(jp.get("employmentType")),
         "jsonld_salary_currency_top": _to_str_or_none(jp.get("salaryCurrency")),
         "jsonld_salary_currency": _to_str_or_none(bs.get("currency")),
         "jsonld_salary_min": bsval.get("minValue"),
         "jsonld_salary_max": bsval.get("maxValue"),
         "jsonld_salary_period": _to_str_or_none(bsval.get("unitText")),
-        "job_location": jp.get("jobLocation"),
+        "job_location": _jsonb_or_null(jp.get("jobLocation")),
         "job_location_type": _to_str_or_none(jp.get("jobLocationType")),
-        "hiring_organization": jp.get("hiringOrganization"),
+        "hiring_organization": _jsonb_or_null(jp.get("hiringOrganization")),
         "industry": _to_str_or_none(jp.get("industry")),
         "direct_apply": jp.get("directApply"),
         "job_benefits": _to_str_or_none(jp.get("jobBenefits")),
         "header_goc": _to_str_or_none(header.get("goc")),
-        "job_type": header.get("jobType"),
-        "job_type_keys": header.get("jobTypeKeys"),
-        "remote_work_types": header.get("remoteWorkTypes"),
+        "job_type": _jsonb_or_null(header.get("jobType")),
+        "job_type_keys": _jsonb_or_null(header.get("jobTypeKeys")),
+        "remote_work_types": _jsonb_or_null(header.get("remoteWorkTypes")),
         "header_expired": header.get("expired"),
         "header_easy_apply": header.get("easyApply"),
         "header_apply_url": _to_str_or_none(header.get("applyUrl")),
         "header_salary_source": _to_str_or_none(header.get("salarySource")),
         "header_salary_currency": _to_str_or_none(header.get("payCurrency")),
         "header_salary_period": _to_str_or_none(header.get("payPeriod")),
-        "header_employer": header.get("employer"),
+        "header_employer": _jsonb_or_null(header.get("employer")),
         "map_address": _to_str_or_none(mmap.get("address")),
         "map_city_name": _to_str_or_none(mmap.get("cityName")),
         "map_country": _to_str_or_none(mmap.get("country")),
         "map_state_name": _to_str_or_none(mmap.get("stateName")),
         "map_location_name": _to_str_or_none(mmap.get("locationName")),
         "map_postal_code": _to_str_or_none(mmap.get("postalCode")),
-        "map_employer": mmap.get("employer"),
+        "map_employer": _jsonb_or_null(mmap.get("employer")),
         "discover_date": discover_date,
         "job_title_text": _to_str_or_none(jjob.get("jobTitleText")),
         "jobview_job_description": _to_str_or_none(jjob.get("description")),

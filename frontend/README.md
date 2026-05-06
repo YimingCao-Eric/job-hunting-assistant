@@ -10,7 +10,7 @@ For Docker-based full-stack setup, see the [repository root README](../README.md
 | --- | --- |
 | UI | [React 18](https://react.dev/) |
 | Routing | [React Router v6](https://reactrouter.com/) |
-| Build | [Vite](https://vite.dev/) (dev server default port **5173**) |
+| Build | [Vite 8](https://vite.dev/) (dev server default port **5173**) |
 | Styling | CSS modules (`*.module.css`); **Tailwind** utilities for **Auto-scrape** dashboard (preflight off — see `tailwind.config.js`) |
 | Auto-scrape UI | TypeScript (`.tsx`) under `src/app/(dashboard)/…`, `src/components/auto-scrape/`, `src/lib/api/autoScrape.ts` |
 
@@ -107,7 +107,7 @@ npm run preview   # optional: local preview of dist/
 
 ## Docker
 
-From the **repository root**, `docker compose` runs the frontend with hot-reload on `src/` (see root `docker-compose.yml`). The container exposes port **5173**.
+From the **repository root**, `docker compose` runs the frontend with hot-reload on `src/` (see root `docker-compose.yml`). The container exposes port **5173**. The backend Compose service mounts **`./data`** for **`config.json`** / **`profile.json`**; frontend does not persist data files.
 
 Environment in Compose sets `VITE_API_URL` and `VITE_AUTH_TOKEN` for the dev server. If the browser runs on the **host** and the API is on `localhost:8000`, that URL is correct for the browser.
 
