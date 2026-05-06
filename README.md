@@ -249,6 +249,7 @@ Includes run metadata, counters, `search_filters`, **`scan_all`**, **`scan_all_p
 
 ## Database notes
 
+- **`linkedin_jobs`**, **`indeed_jobs`**, **`glassdoor_jobs`**: per-source tables holding full scrape payloads (`source_raw` JSONB) when the extension sends **`POST /jobs/ingest`** with **`source_raw`** + **`scan_run_id`**. LinkedIn still carries a legacy **`job_url`** column (duplicate of **`job_posting_url`**) for **`ON CONFLICT (job_url)`** until a later migration moves uniqueness to **`job_posting_url`**. Layout and field sourcing are described in **`docs/step1-source-tables.md`** and **`docs/step1-data-analysis.md`**. Apply migrations **`026_cycle5_drops`** and **`027_schema_reconciliation`** (or run the backend image so startup **`alembic upgrade head`** picks them up).
 - **`auto_scrape_state`**, **`auto_scrape_config`**, **`auto_scrape_cycles`**, **`site_session_states`**: orchestrator singleton state, validated config, per-cycle rows, and per-site probe / `consecutive_failures` (see Alembic migrations).
 - **`extension_state`**: includes `scan_requested`, `stop_requested`, `scan_website`, and pending **Scan All** fields (`scan_all`, `scan_all_position`, `scan_all_total`) cleared when **`GET /pending-scan`** consumes a request.
 - **`dedup_tasks`**: one row per **post-scan sync dedup** background run (ties to **`extension_run_logs.id`** via **`scan_run_id`**); **`last_heartbeat_at`** updated while running. Orphan **`running`** rows are marked **failed** on API startup (**`dedup_task_cleanup`**).
