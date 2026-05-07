@@ -194,10 +194,14 @@ async def trigger_scan(
             },
         )
 
-    # Lazy cleanup of stale running run-logs (e.g. B-23: extension aborted while
-    # backend was down, so the final failed PUT never landed). Real single-site
-    # scans finish in minutes; anything still running after 5m is treated as stuck.
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    # Stale cleanup threshold: 60 minutes.
+    # LinkedIn scans with full pagination can legitimately take ~33 minutes.
+    # 5 minutes (the original value) was firing on healthy scans whenever
+    # a subsequent trigger_scan call came in mid-scrape, falsely marking
+    # them failed. 60 minutes preserves the B-23 stuck-row cleanup case
+    # (extension crashed and final PUT never landed) while never firing
+    # on healthy scans.
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
     await db.execute(
         update(ExtensionRunLog)
         .where(ExtensionRunLog.status == "running")
@@ -205,7 +209,7 @@ async def trigger_scan(
         .values(
             status="failed",
             error_message=(
-                "Scan exceeded 5 minutes without completion; "
+                "Scan exceeded 60 minutes without completion; "
                 "backend likely lost contact during scan. Please retry."
             ),
             completed_at=datetime.now(timezone.utc),
@@ -481,6 +485,9 @@ async def update_run_log(
 
     for field, value in dumped.items():
         setattr(log, field, value)
+
+    if log.status == "completed" and prior_status != "completed":
+        log.error_message = None
 
     await db.flush()
     await db.refresh(log)
