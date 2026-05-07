@@ -27,6 +27,8 @@ from core.config_file import read_config_file
 from core.database import AsyncSessionLocal
 from core.redis_client import REDIS_CHANNEL_AUTO_SCRAPE
 from dedup.service import run_dedup  # noqa: F401 — Phase 4 redesign will use
+from auto_scrape.auto_expiration import run_auto_expiration
+from auto_scrape.matching_claim import claim_unmatched_rows
 from matching.pipeline import (  # noqa: F401
     run_cpu_score_pipeline,
     run_cpu_work,
@@ -217,6 +219,16 @@ async def run_post_scrape_phase(cycle_id: UUID) -> None:
             has_openai_key,
         )
 
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                expiration_results = await run_auto_expiration(db)
+        await _update_cycle(cycle_id, cleanup_results=expiration_results)
+
+        async with AsyncSessionLocal() as db:
+            async with db.begin():
+                claim_results = await claim_unmatched_rows(db)
+        claim_summary = {site: len(rows) for site, rows in claim_results.items()}
+
         dedup_task_id = await _run_dedup_for_cycle(cycle_id)
         await _update_cycle(cycle_id, dedup_task_id=dedup_task_id)
         logger.info("Post-scrape cycle %s: dedup finished", cycle_id)
@@ -225,7 +237,13 @@ async def run_post_scrape_phase(cycle_id: UUID) -> None:
         logger.info("Post-scrape cycle %s: matching finished", cycle_id)
 
         match_results = await _compute_match_results(post_scrape_started_at)
-        await _update_cycle(cycle_id, match_results=match_results)
+        await _update_cycle(
+            cycle_id,
+            match_results={
+                "claim_summary": claim_summary,
+                **match_results,
+            },
+        )
         logger.info(
             "Post-scrape cycle %s: match_results=%s", cycle_id, match_results
         )

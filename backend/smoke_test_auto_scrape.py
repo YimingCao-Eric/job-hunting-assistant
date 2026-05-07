@@ -578,6 +578,7 @@ async def main() -> None:
                             f"(dedup_task_id={row.get('dedup_task_id')})"
                         )
 
+        p4b_pk: str | None = None
         cr2 = await client.post(
             "/admin/auto-scrape/cycle",
             json={"started_at": datetime.now(timezone.utc).isoformat()},
@@ -629,26 +630,95 @@ async def main() -> None:
                     ok(f"Phase 4b wake: status={row['status']}")
 
         gc3 = await client.get("/admin/auto-scrape/cycles?limit=50")
-        done3 = [c for c in gc3.json() if c["status"] == "post_scrape_complete"]
-        if done3:
-            c0 = done3[0]
+        cycles3 = gc3.json()
+        c0 = None
+        if p4b_pk is not None:
+            c0 = next((c for c in cycles3 if str(c["id"]) == str(p4b_pk)), None)
+
+        if c0 is not None and c0.get("status") == "post_scrape_complete":
             if c0.get("match_results") is None:
                 fail("Phase 4c post_scrape_complete missing match_results key")
             elif not isinstance(c0["match_results"], dict):
                 fail("Phase 4c match_results not a dict")
-            elif c0["match_results"] != {}:
-                fail(
-                    f"Phase 4c match_results expected {{}}, got {c0['match_results']!r}"
-                )
-            elif c0.get("dedup_task_id") is not None:
-                fail("Phase 4c dedup_task_id expected null (Phase 4.5 no-op dedup)")
             else:
-                ok(
-                    f"Phase 4c cycle_id={c0.get('cycle_id')}: "
-                    "dedup_task_id=null, match_results={}"
-                )
+                mr = c0["match_results"] or {}
+                if "claim_summary" not in mr:
+                    fail(
+                        "Phase 4c match_results missing claim_summary "
+                        f"(got keys {sorted(mr.keys())})"
+                    )
+                else:
+                    cs = mr["claim_summary"]
+                    if not isinstance(cs, dict):
+                        fail(
+                            f"Phase 4c claim_summary should be dict, "
+                            f"got {type(cs).__name__}"
+                        )
+                    elif set(cs.keys()) != {"linkedin", "indeed", "glassdoor"}:
+                        fail(
+                            "Phase 4c claim_summary missing site keys: "
+                            f"{sorted(cs.keys())}"
+                        )
+                    else:
+                        for site, count in cs.items():
+                            if not isinstance(count, int) or count < 0:
+                                fail(f"Phase 4c {site} claim count is {count!r}")
+                                break
+
+                if not FAILED:
+                    cr = c0.get("cleanup_results") or {}
+                    if "deleted_per_table" not in cr:
+                        fail(
+                            f"Phase 4c cleanup_results missing "
+                            f"deleted_per_table: {cr!r}"
+                        )
+                    elif "shelf_life_days" not in cr:
+                        fail(
+                            f"Phase 4c cleanup_results missing "
+                            f"shelf_life_days: {cr!r}"
+                        )
+                    elif not isinstance(cr["deleted_per_table"], dict):
+                        fail(
+                            "Phase 4c deleted_per_table not a dict: "
+                            f"{cr['deleted_per_table']!r}"
+                        )
+                    elif not isinstance(cr["shelf_life_days"], int):
+                        fail(
+                            "Phase 4c shelf_life_days not int: "
+                            f"{cr['shelf_life_days']!r}"
+                        )
+                    else:
+                        for table, count in cr["deleted_per_table"].items():
+                            if table not in {
+                                "linkedin_jobs",
+                                "indeed_jobs",
+                                "glassdoor_jobs",
+                            }:
+                                fail(
+                                    "Phase 4c unexpected table in "
+                                    f"deleted_per_table: {table}"
+                                )
+                                break
+                            if not isinstance(count, int) or count < 0:
+                                fail(
+                                    f"Phase 4c {table} delete count "
+                                    f"is {count!r}"
+                                )
+                                break
+
+                if not FAILED:
+                    if c0.get("dedup_task_id") is not None:
+                        fail(
+                            "Phase 4c dedup_task_id expected null "
+                            "(Phase 4.5 no-op dedup)"
+                        )
+                    else:
+                        ok(
+                            f"Phase 4c cycle_id={c0.get('cycle_id')}: "
+                            "dedup_task_id=null, match_results+cleanup_results OK"
+                        )
         else:
-            ok("[SKIP] Phase 4c no post_scrape_complete row to inspect")
+            ok("[SKIP] Phase 4c no post_scrape_complete row for Phase 4b cycle")
 
         print("=== Phase 4 tests done ===")
         print()
