@@ -12,6 +12,14 @@ The service worker coordinates scans, forwards ingest requests from content scri
 
 The **`manifest.json` `description`** field is a short storefront line and may imply LinkedIn-only; **`host_permissions`** and content-script matches include **Indeed** and **Glassdoor** as documented below.
 
+## Documentation — scrape payloads vs backend columns
+
+When changing what the extension sends on **`POST /jobs/ingest`**, align with the canonical field catalogs (payload paths → DB columns, **`source_raw`**, **`matched`**):
+
+- [**docs/scrape-fields-linkedin.md**](../docs/scrape-fields-linkedin.md)
+- [**docs/scrape-fields-indeed.md**](../docs/scrape-fields-indeed.md)
+- [**docs/scrape-fields-glassdoor.md**](../docs/scrape-fields-glassdoor.md)
+
 ## Architecture
 
 ```

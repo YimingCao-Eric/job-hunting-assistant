@@ -51,8 +51,21 @@ backend/
 ├── alembic.ini
 ├── requirements.txt
 ├── Dockerfile
-└── smoke_test.py        HTTP smoke tests (run against a live API)
+├── smoke_test_auto_scrape.py   HTTP + DB smoke (auto-scrape, orchestrator — run against live API)
+├── smoke_test_matched_claim.py
+├── smoke_test_auto_expiration.py
+└── scripts/             helpers (e.g. **`verify_matched_column.py`** after migration **028**)
 ```
+
+## Documentation — per-source scrape fields
+
+Payload→column catalogs for **`POST /jobs/ingest`** and **`linkedin_jobs` / indeed_jobs / glassdoor_jobs**:
+
+| Doc | Site |
+| --- | --- |
+| [**docs/scrape-fields-linkedin.md**](../docs/scrape-fields-linkedin.md) | LinkedIn Voyager |
+| [**docs/scrape-fields-indeed.md**](../docs/scrape-fields-indeed.md) | Indeed |
+| [**docs/scrape-fields-glassdoor.md**](../docs/scrape-fields-glassdoor.md) | Glassdoor |
 
 ## Environment
 
@@ -254,19 +267,19 @@ Implementation: **`routers/auto_scrape.py`**. Post-scrape pipeline steps may be 
 
 `main.py` allows `chrome-extension://…` and `http://localhost|127.0.0.1:any-port` via regex, plus fixed origins for `localhost:3000` and `localhost:8000`, so the Vite dev server and extension can call the API from the browser.
 
-## Smoke tests
+## Smoke tests / verification
 
-With the stack running:
-
-```bash
-docker compose exec backend python smoke_test.py
-```
-
-Or from `backend/` with `DATABASE_URL` and API reachable:
+From the repo root with Compose running:
 
 ```bash
-python smoke_test.py
+curl http://localhost:8000/health
+docker compose exec backend python smoke_test_auto_scrape.py
+docker compose exec backend python smoke_test_matched_claim.py
+docker compose exec backend python smoke_test_auto_expiration.py
+docker compose exec backend python scripts/verify_matched_column.py
 ```
+
+(`WORKDIR` in the container is **`/app`**; **`scripts/`** sits beside **`main.py`**.)
 
 ## Logging
 
@@ -276,7 +289,7 @@ Per-logger levels are also set near the top of **`main.py`** (e.g. **`routers.jo
 
 ## Development notes
 
-- **Per-source ingest (`routers/jobs.py`):** When **`POST /jobs/ingest`** includes **`source_raw`** and **`scan_run_id`**, rows go to **`linkedin_jobs`**, **`indeed_jobs`**, or **`glassdoor_jobs`** via **`build_linkedin_params`**, **`build_indeed_params`**, and **`build_glassdoor_params`**. Helpers normalize types before raw SQL inserts because **asyncpg** does not coerce Python values across mismatched column kinds. Use **`_to_str_or_none`** when JSON payloads deliver numbers but the DB column is **`VARCHAR`/`TEXT`** (e.g. LinkedIn **`job_posting_id`**). Use **`_to_int_or_none`** when **`INTEGER`** columns receive numeric strings (e.g. Glassdoor **`gocId`**, **`jobCountryId`**; Indeed **`location_count`**, **`num_hires`**). Leave **`NUMERIC`** salary fields unwrapped. Column lists **`LINKEDIN_COLS`**, **`INDEED_COLS`**, **`GLASSDOOR_COLS`** must stay aligned with the live schema; JSONB columns use **`JSONB(none_as_null=True)`** bindparams (`*_JSONB_COLS`). Schema design is documented under **`docs/step1-source-tables.md`** and **`docs/step1-data-analysis.md`** (cycle 5). Alembic revisions **`026_cycle5_drops`** and **`027_schema_reconciliation`** apply the cycle-5 and prior-cycle column drops.
+- **Per-source ingest (`routers/jobs.py`):** When **`POST /jobs/ingest`** includes **`source_raw`** and **`scan_run_id`**, rows go to **`linkedin_jobs`**, **`indeed_jobs`**, or **`glassdoor_jobs`** via **`build_linkedin_params`**, **`build_indeed_params`**, and **`build_glassdoor_params`**. Helpers normalize types before raw SQL inserts because **asyncpg** does not coerce Python values across mismatched column kinds. Use **`_to_str_or_none`** when JSON payloads deliver numbers but the DB column is **`VARCHAR`/`TEXT`** (e.g. LinkedIn **`job_posting_id`**). Use **`_to_int_or_none`** when **`INTEGER`** columns receive numeric strings (e.g. Glassdoor **`gocId`**, **`jobCountryId`**; Indeed **`location_count`**, **`num_hires`**). Leave **`NUMERIC`** salary fields unwrapped. Column lists **`LINKEDIN_COLS`**, **`INDEED_COLS`**, **`GLASSDOOR_COLS`** must stay aligned with the live schema; JSONB columns use **`JSONB(none_as_null=True)`** bindparams (`*_JSONB_COLS`). Field catalogs vs columns live in [**docs/scrape-fields-linkedin.md**](../docs/scrape-fields-linkedin.md), [**docs/scrape-fields-indeed.md**](../docs/scrape-fields-indeed.md), and [**docs/scrape-fields-glassdoor.md**](../docs/scrape-fields-glassdoor.md); broader ingest/schema narrative in [**docs/step1-schema-design.md**](../docs/step1-schema-design.md) and [**docs/step1-auto-expiration.md**](../docs/step1-auto-expiration.md). Alembic revisions **`026_cycle5_drops`**, **`027_schema_reconciliation`**, **`025_per_source_scrape_tables`**, **`028_add_matched_column`**, **`029_system_settings`** (among others) track DDL evolution under **`alembic/versions/`**.
 - **Scan debug trace:** `extension_run_logs.debug_log` is optional JSONB (`{ "events": [ … ] }`). The extension appends via **`POST /extension/run-log/{id}/debug`**; ring size is **`settings.debug_log_ring_size`** (default **10,000**), shared with dedup/match report append endpoints.
 - **Pipeline debug trace:** `dedup_reports.debug_log` and `match_reports.debug_log` use the same `{ "events": [ … ] }` shape. Populated by **`core.trace`** during **`run_dedup`** and matching **`run_*`** pipelines (flush at end of run; optional crash stub row + flush on failure).
 - **Startup:** Stale `extension_run_logs` rows stuck in `running` for more than 2 hours are marked `failed` on API boot; stale **`dedup_tasks`** in **`running`** are marked **`failed`** (**`dedup_task_cleanup`**).

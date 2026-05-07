@@ -26,6 +26,18 @@ backend/            FastAPI + SQLAlchemy async + PostgreSQL; optional **Redis** 
 docker-compose.yml  Backend + Postgres 16 + **Redis 7**; host **`./data`** mounted at **`/app/data`** so `config.json` and `profile.json` survive rebuilds (**`CONFIG_PATH`**, **`PROFILE_PATH`**)
 ```
 
+## Documentation — per-source scrape fields
+
+Canonical catalogs for **`POST /jobs/ingest`** payloads mapped to **`linkedin_jobs`**, **`indeed_jobs`**, and **`glassdoor_jobs`** (what each surface exposes, what we keep vs drop, and column lineage):
+
+| Doc | Site |
+| --- | --- |
+| [**docs/scrape-fields-linkedin.md**](docs/scrape-fields-linkedin.md) | LinkedIn Voyager (`WebFullJobPosting`) |
+| [**docs/scrape-fields-indeed.md**](docs/scrape-fields-indeed.md) | Indeed mosaic SERP + GraphQL |
+| [**docs/scrape-fields-glassdoor.md**](docs/scrape-fields-glassdoor.md) | Glassdoor SERP / JSON-LD / RSC job detail |
+
+Schema evolution (including **`matched`**, **`system_settings`**, cycle-5 drops) is in Alembic under **`backend/alembic/versions/`**. Higher-level ingest/design notes live in [**docs/step1-schema-design.md**](docs/step1-schema-design.md) and [**docs/step1-auto-expiration.md**](docs/step1-auto-expiration.md).
+
 ## Quick Start
 
 ### 1. Configure environment
@@ -109,15 +121,19 @@ The extension can run **unattended multi-site cycles** (LinkedIn, Indeed, Glassd
 - **Hardening:** repeated pre-check failures **auto-pause** (`enabled: false`); explicit **Enable** clears the pre-check counter. Sites with high **consecutive_failures** or **`last_probe_status === captcha`** are skipped until **reset-session** / user resolves CAPTCHA. **`GET /admin/auto-scrape/instances`** supports the dashboard multi-instance banner. Backend startup can mark stale **`auto_scrape_cycles`** failed and reset **`cycle_phase`** to **`idle`** in **`auto_scrape_state`** when those rows are cleaned up.
 - **Further reading:** extension `background/auto_scrape*.js`, `poll.js`; backend `routers/auto_scrape.py`, `core/auto_scrape_lifecycle.py`.
 
-## Smoke Tests
+## Smoke tests / verification
 
-Run the automated smoke test suite against a running backend:
+With **`docker compose up`** running:
 
 ```bash
-docker compose exec backend python smoke_test.py
+curl http://localhost:8000/health
+docker compose exec backend python smoke_test_auto_scrape.py
+docker compose exec backend python smoke_test_matched_claim.py
+docker compose exec backend python smoke_test_auto_expiration.py
+docker compose exec backend python scripts/verify_matched_column.py
 ```
 
-This verifies: health, config, job ingest (including content-duplicate `original_job_id`), run log start/complete/list, extension state, and trigger-scan / pending-scan.
+**`smoke_test_auto_scrape.py`** hits admin auto-scrape routes, extension/run-log flows, and post-scrape orchestration helpers. **`smoke_test_matched_claim.py`** and **`smoke_test_auto_expiration.py`** exercise DB helpers for matched-claim and shelf-life expiration (expect migrations through **029** and valid FK-backed **`extension_run_logs`** where noted in each script). **`scripts/verify_matched_column.py`** confirms **`matched`** after migration **028**.
 
 ## Config Reference
 
@@ -249,7 +265,7 @@ Includes run metadata, counters, `search_filters`, **`scan_all`**, **`scan_all_p
 
 ## Database notes
 
-- **`linkedin_jobs`**, **`indeed_jobs`**, **`glassdoor_jobs`**: per-source tables holding full scrape payloads (`source_raw` JSONB) when the extension sends **`POST /jobs/ingest`** with **`source_raw`** + **`scan_run_id`**. LinkedIn still carries a legacy **`job_url`** column (duplicate of **`job_posting_url`**) for **`ON CONFLICT (job_url)`** until a later migration moves uniqueness to **`job_posting_url`**. Layout and field sourcing are described in **`docs/step1-source-tables.md`** and **`docs/step1-data-analysis.md`**. Apply migrations **`026_cycle5_drops`** and **`027_schema_reconciliation`** (or run the backend image so startup **`alembic upgrade head`** picks them up).
+- **`linkedin_jobs`**, **`indeed_jobs`**, **`glassdoor_jobs`**: per-source tables holding full scrape payloads (`source_raw` JSONB) when the extension sends **`POST /jobs/ingest`** with **`source_raw`** + **`scan_run_id`**. LinkedIn still carries a legacy **`job_url`** column (duplicate of **`job_posting_url`**) for **`ON CONFLICT (job_url)`** until a later migration moves uniqueness to **`job_posting_url`**. Column counts and payload→column mapping are documented in [**docs/scrape-fields-linkedin.md**](docs/scrape-fields-linkedin.md), [**docs/scrape-fields-indeed.md**](docs/scrape-fields-indeed.md), and [**docs/scrape-fields-glassdoor.md**](docs/scrape-fields-glassdoor.md) (Alembic **025**–**029**, including **`matched`** from **028**). Older cycle-5 column drops: **`026_cycle5_drops`**, **`027_schema_reconciliation`**.
 - **`auto_scrape_state`**, **`auto_scrape_config`**, **`auto_scrape_cycles`**, **`site_session_states`**: orchestrator singleton state, validated config, per-cycle rows, and per-site probe / `consecutive_failures` (see Alembic migrations).
 - **`extension_state`**: includes `scan_requested`, `stop_requested`, `scan_website`, and pending **Scan All** fields (`scan_all`, `scan_all_position`, `scan_all_total`) cleared when **`GET /pending-scan`** consumes a request.
 - **`dedup_tasks`**: one row per **post-scan sync dedup** background run (ties to **`extension_run_logs.id`** via **`scan_run_id`**); **`last_heartbeat_at`** updated while running. Orphan **`running`** rows are marked **failed** on API startup (**`dedup_task_cleanup`**).

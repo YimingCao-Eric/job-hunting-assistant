@@ -4,6 +4,8 @@ Single-page app for **search configuration**, **profile / resume**, **job list**
 
 For Docker-based full-stack setup, see the [repository root README](../README.md).
 
+Extension ingest payloads and DB columns are documented under **`docs/scrape-fields-*.md`** at the repo root (LinkedIn, Indeed, Glassdoor).
+
 ## Stack
 
 | Layer | Technology |
