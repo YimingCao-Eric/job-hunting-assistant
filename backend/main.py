@@ -93,7 +93,7 @@ async def lifespan(_app: FastAPI):
 
 
 # Backend logging — attach a stdout handler at INFO level so structured
-# ingest_* events (per step1-schema-design.md §10) surface in
+# ingest_* events from routers/jobs surface in
 # `docker compose logs backend`. Without this, logger.info() calls are
 # discarded by the root logger's default WARNING level + missing handler.
 logging.basicConfig(

@@ -1,8 +1,7 @@
 """Auto-expiration: delete per-source rows older than shelf_life_days.
 
-Per step1-auto-expiration.md and matched-mechanism-updates-and-scan.md
-Issue 2.5 Solution A: deletes regardless of `matched` value. Un-matched
-rows aged out are documented in Known Limitations §15.2.
+Deletes rows older than `system_settings.shelf_life_days` regardless of
+`matched`. Shelf life is read via `core.system_settings.get_shelf_life_days`.
 """
 
 from __future__ import annotations

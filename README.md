@@ -36,7 +36,7 @@ Canonical catalogs for **`POST /jobs/ingest`** payloads mapped to **`linkedin_jo
 | [**docs/scrape-fields-indeed.md**](docs/scrape-fields-indeed.md) | Indeed mosaic SERP + GraphQL |
 | [**docs/scrape-fields-glassdoor.md**](docs/scrape-fields-glassdoor.md) | Glassdoor SERP / JSON-LD / RSC job detail |
 
-Schema evolution (including **`matched`**, **`system_settings`**, cycle-5 drops) is in Alembic under **`backend/alembic/versions/`**. Higher-level ingest/design notes live in [**docs/step1-schema-design.md**](docs/step1-schema-design.md) and [**docs/step1-auto-expiration.md**](docs/step1-auto-expiration.md).
+Schema evolution (including **`matched`**, **`system_settings`**, cycle-5 drops) is in Alembic under **`backend/alembic/versions/`**.
 
 ## Quick Start
 

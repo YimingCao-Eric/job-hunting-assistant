@@ -1,7 +1,7 @@
 """Matching claim-and-flag helper.
 
 Atomically claims unmatched rows from all three per-source tables
-via UPDATE-RETURNING (see docs/step1-schema-design.md §10.X).
+via UPDATE-RETURNING.
 
 Pattern (per Issue 2.4 Solution A): all three UPDATEs run in one
 transaction. Caller manages the transaction boundary.

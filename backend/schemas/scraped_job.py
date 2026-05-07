@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class ScrapedJobIngest(BaseModel):
     website: str = "linkedin"
     scan_run_id: UUID | None = None
-    source_raw: dict | None = None  # NEW — site-specific raw response, see step1-schema-design.md §10.1
+    source_raw: dict | None = None  # site-specific raw response; see docs/scrape-fields-*.md
     # Legacy unified fields (still sent by current content scripts)
     job_title: str | None = None
     company: str | None = None
