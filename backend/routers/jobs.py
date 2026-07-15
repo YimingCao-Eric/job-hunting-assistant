@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
@@ -6,17 +5,17 @@ from time import monotonic
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import bindparam, func, or_, select, text
+from sqlalchemy import bindparam, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.auth import get_current_user
 from core.database import get_db
+from core.scraped_job_projection import CANONICAL_COLS, project_to_canonical
 from models.scraped_job import ScrapedJob
 from schemas.scraped_job import (
     JobUpdate,
     JobsListResponse,
-    ScrapedJobDetail,
     ScrapedJobIngest,
     ScrapedJobIngestResponse,
     ScrapedJobRead,
@@ -28,9 +27,10 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def _hash_description(text: str | None) -> str:
-    raw = (text or "").strip().lower()
-    return hashlib.sha256(raw.encode()).hexdigest()
+# Returned as the id for skip-reason submissions, which write no row and so have no id to
+# report. The field is non-optional in the response model and the extension only null-checks
+# it, so a nil uuid is the least surprising placeholder.
+_NIL_UUID = UUID(int=0)
 
 
 def _resolve_linkedin_included(
@@ -176,16 +176,21 @@ LINKEDIN_JSONB_COLS = [
 _cols_sql = ", ".join(LINKEDIN_COLS)
 _vals_sql = ", ".join(f":{c}" for c in LINKEDIN_COLS)
 
+# scrape_time is returned alongside id so the canonical scraped_jobs row can copy the
+# exact value this row holds. Auto-expiration deletes from both tables with the same
+# timestamp predicate; if the canonical row defaulted to its own now() instead, the two
+# could straddle the shelf-life boundary and leave orphans. Returning extra columns does
+# not change what is written, so the per-source contract is unaffected.
 INSERT_LINKEDIN_JOB = text(f"""
     WITH inserted AS (
         INSERT INTO linkedin_jobs ({_cols_sql})
         VALUES ({_vals_sql})
         ON CONFLICT (job_url) DO NOTHING
-        RETURNING id
+        RETURNING id, scrape_time
     )
-    SELECT id, false AS already_exists FROM inserted
+    SELECT id, scrape_time, false AS already_exists FROM inserted
     UNION ALL
-    SELECT id, true AS already_exists FROM linkedin_jobs
+    SELECT id, scrape_time, true AS already_exists FROM linkedin_jobs
      WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
 """).bindparams(*(bindparam(c, type_=JSONB(none_as_null=True)) for c in LINKEDIN_JSONB_COLS))
@@ -234,11 +239,11 @@ INSERT_INDEED_JOB = text(f"""
         INSERT INTO indeed_jobs ({_indeed_cols_sql})
         VALUES ({_indeed_vals_sql})
         ON CONFLICT (job_url) DO NOTHING
-        RETURNING id
+        RETURNING id, scrape_time
     )
-    SELECT id, false AS already_exists FROM inserted
+    SELECT id, scrape_time, false AS already_exists FROM inserted
     UNION ALL
-    SELECT id, true AS already_exists FROM indeed_jobs
+    SELECT id, scrape_time, true AS already_exists FROM indeed_jobs
      WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
 """).bindparams(*(bindparam(c, type_=JSONB(none_as_null=True)) for c in INDEED_JSONB_COLS))
@@ -307,14 +312,56 @@ INSERT_GLASSDOOR_JOB = text(f"""
         INSERT INTO glassdoor_jobs ({_glassdoor_cols_sql})
         VALUES ({_glassdoor_vals_sql})
         ON CONFLICT (job_url) DO NOTHING
-        RETURNING id
+        RETURNING id, scrape_time
     )
-    SELECT id, false AS already_exists FROM inserted
+    SELECT id, scrape_time, false AS already_exists FROM inserted
     UNION ALL
-    SELECT id, true AS already_exists FROM glassdoor_jobs
+    SELECT id, scrape_time, true AS already_exists FROM glassdoor_jobs
      WHERE job_url = :job_url AND NOT EXISTS (SELECT 1 FROM inserted)
     LIMIT 1
 """).bindparams(*(bindparam(c, type_=JSONB(none_as_null=True)) for c in GLASSDOOR_JSONB_COLS))
+
+
+# Canonical dual-write target. Column order comes from the projection module so the two
+# cannot drift apart.
+#
+# ON CONFLICT (job_url) DO NOTHING mirrors the per-source inserts: a re-scrape of a URL
+# already stored is a no-op in both tables, which preserves the existing row's `dismissed`
+# and `matched` state.
+#
+# No JSONB columns here (scraped_jobs carries no raw payload), so unlike the per-source
+# statements this one needs no bindparam type declarations.
+_canonical_cols_sql = ", ".join(CANONICAL_COLS)
+_canonical_vals_sql = ", ".join(f":{c}" for c in CANONICAL_COLS)
+
+INSERT_SCRAPED_JOB = text(f"""
+    INSERT INTO scraped_jobs ({_canonical_cols_sql})
+    VALUES ({_canonical_vals_sql})
+    ON CONFLICT (job_url) DO NOTHING
+""")
+
+
+async def _write_canonical_row(
+    db: AsyncSession,
+    site: str,
+    params: dict,
+    source_row_id,
+    scrape_time,
+) -> None:
+    """Write the canonical scraped_jobs row for a per-source row just inserted.
+
+    Runs in the caller's session, so it shares the request transaction opened by `get_db`
+    and commits with the per-source insert or not at all. No explicit transaction is
+    started here — `get_db` already wraps the request, and beginning another would nest
+    inside it and raise.
+    """
+    canonical = project_to_canonical(
+        site=site,
+        params=params,
+        source_row_id=source_row_id,
+        scrape_time=scrape_time,
+    )
+    await db.execute(INSERT_SCRAPED_JOB, canonical)
 
 
 def build_linkedin_params(body: ScrapedJobIngest) -> dict:
@@ -617,34 +664,50 @@ async def ingest_job(
 
     try:
         if body.skip_reason:
-            t_stage = monotonic()
-            data = body.model_dump(exclude_unset=False, exclude={"source_raw"})
-            data["job_url"] = None
-            new_job = ScrapedJob(**data)
-            new_job.ingest_source = "extension"
-            db.add(new_job)
-            await db.flush()
-            logger.debug(
-                "ingest_db_done %s",
-                {**log_context, "took_ms": int((monotonic() - t_stage) * 1000)},
-            )
+            # Accepted and discarded. A skipped card is not a posting, and the unified
+            # store has no shape for one: it records no skip reason and every row needs a
+            # job_url, which these submissions do not carry.
+            #
+            # This returns 200 rather than 400 on purpose. The extension's recordSkip()
+            # fires for every skipped card on every site and retries three times with
+            # 1s/2s/3s backoff on failure, so rejecting would add roughly six seconds of
+            # dead wait per skipped card to a scan path this change does not otherwise
+            # touch. The skip counters that matter are already tracked in the content
+            # script. Once recordSkip() is removed from the extension, this branch and the
+            # legacy fields on ScrapedJobIngest can go with it.
             logger.info(
-                "ingest_ok %s",
+                "ingest_skip_noop %s",
                 {
                     **log_context,
+                    "skip_reason": body.skip_reason,
                     "took_ms": int((monotonic() - t_start) * 1000),
-                    "path": "skip_reason",
+                    "path": "skip_reason_noop",
                 },
             )
             return ScrapedJobIngestResponse(
-                id=new_job.id,
+                id=_NIL_UUID,
                 already_exists=False,
                 content_duplicate=False,
                 skip_reason=body.skip_reason,
             )
 
         if body.source_raw is None:
-            logger.info("ingest_transition_fallback %s", {"website": body.website})
+            # The legacy path that once wrote a source-shaped row here is gone: it built
+            # rows in a shape the unified store no longer has (content-hash dedup,
+            # self-referential original_job_id). Without source_raw there is nothing to
+            # project onto a canonical row, so this is a bad request rather than a
+            # silent second-class write.
+            logger.warning(
+                "ingest_missing_source_raw %s",
+                {**log_context, "path": "rejected"},
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "source_raw required: per-source ingest needs the site payload "
+                    f"(website={body.website!r})"
+                ),
+            )
         else:
             site = (body.website or "").strip().lower()
             if site not in ("linkedin", "indeed", "glassdoor"):
@@ -670,6 +733,9 @@ async def ingest_job(
                         )
                     result = await db.execute(INSERT_LINKEDIN_JOB, params)
                     row = result.one()
+                    await _write_canonical_row(
+                        db, "linkedin", params, row.id, row.scrape_time
+                    )
                     logger.info(
                         "ingest_ok %s",
                         {
@@ -678,6 +744,9 @@ async def ingest_job(
                             "path": "linkedin_jobs",
                         },
                     )
+                    # id is the per-source row's, not the canonical row's. GET /jobs/{id}
+                    # takes canonical ids, so the two are distinct id spaces; nothing
+                    # consumes them together today.
                     return ScrapedJobIngestResponse(
                         id=row.id,
                         already_exists=row.already_exists,
@@ -698,6 +767,9 @@ async def ingest_job(
                     params = build_indeed_params(body)
                     result = await db.execute(INSERT_INDEED_JOB, params)
                     row = result.one()
+                    await _write_canonical_row(
+                        db, "indeed", params, row.id, row.scrape_time
+                    )
                     logger.info(
                         "ingest_ok %s",
                         {
@@ -726,6 +798,9 @@ async def ingest_job(
                     params = build_glassdoor_params(body)
                     result = await db.execute(INSERT_GLASSDOOR_JOB, params)
                     row = result.one()
+                    await _write_canonical_row(
+                        db, "glassdoor", params, row.id, row.scrape_time
+                    )
                     logger.info(
                         "ingest_ok %s",
                         {
@@ -750,113 +825,13 @@ async def ingest_job(
                         detail=f"Malformed source_raw for website={body.website}",
                     ) from e
 
-        t_dedup = monotonic()
-        if body.job_url:
-            existing = await db.execute(
-                select(ScrapedJob).where(ScrapedJob.job_url == body.job_url)
-            )
-            row = existing.scalars().first()
-            if row is not None:
-                logger.debug(
-                    "ingest_dedup_done %s",
-                    {
-                        **log_context,
-                        "took_ms": int((monotonic() - t_dedup) * 1000),
-                        "result": "url_duplicate",
-                    },
-                )
-                logger.debug(
-                    "ingest_embedding_done %s",
-                    {**log_context, "took_ms": 0, "note": "n/a"},
-                )
-                logger.debug(
-                    "ingest_db_done %s",
-                    {**log_context, "took_ms": 0, "note": "no_write"},
-                )
-                logger.info(
-                    "ingest_ok %s",
-                    {
-                        **log_context,
-                        "took_ms": int((monotonic() - t_start) * 1000),
-                        "path": "url_duplicate_hit",
-                    },
-                )
-                return ScrapedJobIngestResponse(
-                    id=row.id,
-                    already_exists=True,
-                    content_duplicate=False,
-                    skip_reason="url_duplicate",
-                )
-
-        jd = body.job_description
-        if jd is not None and not str(jd).strip():
-            jd = None
-            body = body.model_copy(update={"job_description": None})
-
-        desc_hash = _hash_description(jd)
-
-        hash_match = await db.execute(
-            select(ScrapedJob).where(ScrapedJob.raw_description_hash == desc_hash)
-        )
-        content_dup_row = hash_match.scalars().first()
-        content_duplicate = content_dup_row is not None
-
-        logger.debug(
-            "ingest_dedup_done %s",
-            {
-                **log_context,
-                "took_ms": int((monotonic() - t_dedup) * 1000),
-                "content_dup": content_duplicate,
-            },
-        )
-
-        t_emb = monotonic()
-        logger.debug(
-            "ingest_embedding_done %s",
-            {
-                **log_context,
-                "took_ms": int((monotonic() - t_emb) * 1000),
-                "note": "n/a",
-            },
-        )
-
-        payload = body.model_dump(exclude_unset=False, exclude={"source_raw"})
-        payload.pop("original_job_id", None)
-        if content_duplicate and content_dup_row is not None:
-            payload["original_job_id"] = content_dup_row.id
-        else:
-            payload["original_job_id"] = None
-
-        new_job = ScrapedJob(
-            **payload,
-            raw_description_hash=desc_hash,
-        )
-        new_job.ingest_source = "extension"
-
-        t_db = monotonic()
-        db.add(new_job)
-        await db.flush()
-        logger.debug(
-            "ingest_db_done %s",
-            {**log_context, "took_ms": int((monotonic() - t_db) * 1000)},
-        )
-
-        resp_skip = new_job.skip_reason or (
-            "content_duplicate" if content_duplicate else None
-        )
-        logger.info(
-            "ingest_ok %s",
-            {
-                **log_context,
-                "took_ms": int((monotonic() - t_start) * 1000),
-                "path": "insert",
-            },
-        )
-        return ScrapedJobIngestResponse(
-            id=new_job.id,
-            already_exists=False,
-            content_duplicate=content_duplicate,
-            skip_reason=resp_skip,
+        # Unreachable: the site allowlist above rejects anything that is not one of the
+        # three, and each site branch returns. Guarded explicitly so a future site added
+        # to the allowlist without a branch fails loudly here rather than returning None
+        # and surfacing as an opaque response-validation error.
+        raise HTTPException(
+            status_code=500,
+            detail=f"No ingest branch for website={body.website!r}",
         )
     except HTTPException:
         raise
@@ -874,76 +849,67 @@ async def ingest_job(
 
 @router.get("", response_model=JobsListResponse)
 async def list_jobs(
-    website: str | None = None,
+    source_site: str | None = None,
     dismissed: bool | None = None,
     scan_run_id: UUID | None = None,
-    easy_apply: bool | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
     scraped_from: date | None = None,
     scraped_to: date | None = None,
-    dedup_status: str | None = None,
     limit: int = Query(25, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    order_clause = (ScrapedJob.created_at.desc(),)
+    """List canonical scraped postings across all three sites.
+
+    Gone from the previous signature, with no replacement:
+      - `website`   -> renamed `source_site`
+      - `easy_apply` -> no canonical field. The three sites express easy-apply
+        incompatibly (LinkedIn apply_method_type, Indeed indeed_apply_enabled,
+        Glassdoor is_easy_apply/direct_apply) and the mapping defines no unified
+        column, so filtering on it would require inventing one.
+      - `dedup_status` -> filtered on skip_reason, which no longer exists.
+    """
+    # Was created_at DESC; the canonical row records when it was scraped as scrape_time.
+    order_clause = (ScrapedJob.scrape_time.desc(),)
 
     conditions = []
-    if dedup_status == "removed":
-        conditions.append(
-            or_(
-                ScrapedJob.skip_reason.isnot(None),
-                ScrapedJob.dismissed == True,  # noqa: E712
-            )
-        )
-    elif dedup_status == "passed":
-        conditions.append(ScrapedJob.skip_reason.is_(None))
-        conditions.append(ScrapedJob.dismissed == False)  # noqa: E712
-    elif dedup_status == "all":
-        pass
-    else:
-        conditions.append(ScrapedJob.skip_reason.is_(None))
 
-    if website:
-        conditions.append(ScrapedJob.website == website)
-    if dismissed is not None:
+    # Default excludes dismissed postings, so dismissing one removes it from the working
+    # list. The retired store defaulted to hiding dedup-*skipped* rows instead; with the
+    # skip concept gone, dismissal is the meaningful default. Pass ?dismissed=true to see
+    # them, or ?dismissed=false to be explicit.
+    if dismissed is None:
+        conditions.append(ScrapedJob.dismissed == False)  # noqa: E712
+    else:
         conditions.append(ScrapedJob.dismissed == dismissed)
+
+    if source_site:
+        conditions.append(ScrapedJob.source_site == source_site)
     if scan_run_id is not None:
         conditions.append(ScrapedJob.scan_run_id == scan_run_id)
-    if easy_apply is not None:
-        conditions.append(ScrapedJob.easy_apply == easy_apply)
     if date_from is not None:
-        conditions.append(ScrapedJob.post_datetime >= date_from)
+        conditions.append(ScrapedJob.posted_at >= date_from)
     if date_to is not None:
-        conditions.append(ScrapedJob.post_datetime <= date_to)
+        conditions.append(ScrapedJob.posted_at <= date_to)
     if scraped_from is not None:
         lo = datetime.combine(scraped_from, time.min, tzinfo=dt_timezone.utc)
-        conditions.append(ScrapedJob.created_at >= lo)
+        conditions.append(ScrapedJob.scrape_time >= lo)
     if scraped_to is not None:
         hi = datetime.combine(scraped_to, time.min, tzinfo=dt_timezone.utc) + timedelta(
             days=1
         )
-        conditions.append(ScrapedJob.created_at < hi)
+        conditions.append(ScrapedJob.scrape_time < hi)
 
-    if conditions:
-        count_stmt = select(func.count()).select_from(ScrapedJob).where(*conditions)
-        stmt = (
-            select(ScrapedJob)
-            .where(*conditions)
-            .order_by(*order_clause)
-            .offset(offset)
-            .limit(limit)
-        )
-    else:
-        count_stmt = select(func.count()).select_from(ScrapedJob)
-        stmt = (
-            select(ScrapedJob)
-            .order_by(*order_clause)
-            .offset(offset)
-            .limit(limit)
-        )
+    count_stmt = select(func.count()).select_from(ScrapedJob).where(*conditions)
+    stmt = (
+        select(ScrapedJob)
+        .where(*conditions)
+        .order_by(*order_clause)
+        .offset(offset)
+        .limit(limit)
+    )
 
     total = (await db.execute(count_stmt)).scalar_one()
 
@@ -957,39 +923,26 @@ async def list_jobs(
     )
 
 
-@router.get("/skipped", response_model=list[ScrapedJobRead])
-async def list_skipped_jobs(
-    scan_run_id: UUID,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
-    _user: dict = Depends(get_current_user),
-):
-    stmt = (
-        select(ScrapedJob)
-        .where(
-            ScrapedJob.scan_run_id == scan_run_id,
-            ScrapedJob.skip_reason.is_not(None),
-        )
-        .order_by(ScrapedJob.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
-
-@router.get("/{job_id}", response_model=ScrapedJobDetail)
+@router.get("/{job_id}", response_model=ScrapedJobRead)
 async def get_job(
     job_id: UUID,
     db: AsyncSession = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
+    """Fetch one canonical posting by its scraped_jobs id.
+
+    Note this is the *canonical* id. POST /jobs/ingest returns the per-source row's id;
+    the two are distinct id spaces.
+
+    Returns the same shape as the listing. The previous detail-only response existed to
+    expose the raw site payload, which the canonical row no longer carries — raw payloads
+    live on the per-source row, reachable via source_row_id.
+    """
     result = await db.execute(select(ScrapedJob).where(ScrapedJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return ScrapedJobDetail.model_validate(job)
+    return ScrapedJobRead.model_validate(job)
 
 
 @router.put("/{job_id}", response_model=ScrapedJobRead)

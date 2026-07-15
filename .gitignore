@@ -17,3 +17,5 @@ Thumbs.db
 
 test.txt
 captured-env.txt
+
+*.log

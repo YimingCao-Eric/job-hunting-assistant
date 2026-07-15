@@ -5,6 +5,7 @@ Verifies:
   - claim returns the rows
   - the SQL pattern is idempotent (verified scoped to test rows, not globally)
   - all three tables claimed in one transaction (manual fault-injection — SKIP'd here)
+  - the claim also reaches the canonical scraped_jobs twin, so the two never disagree
 """
 
 from __future__ import annotations
@@ -138,6 +139,85 @@ async def test_basic_claim() -> None:
     print("[OK] basic claim and flag")
 
 
+async def test_claim_reaches_canonical_row() -> None:
+    """FR-028: claiming a per-source row records the claim on its canonical twin.
+
+    Without this, the canonical `matched` is permanently wrong: it is copied at ingest,
+    when it is always false, and nothing else would ever set it true.
+    """
+    async with AsyncSessionLocal() as db:
+        run_id = (
+            await db.execute(text("SELECT id FROM extension_run_logs LIMIT 1"))
+        ).scalar()
+        await db.commit()
+        if run_id is None:
+            print("[SKIP] claim_canonical: no extension_run_logs rows", file=sys.stderr)
+            return
+
+    async with AsyncSessionLocal() as db:
+        source_id = await _setup_test_row(db, "linkedin_jobs", run_id)
+        url = (
+            await db.execute(
+                text("SELECT job_url FROM linkedin_jobs WHERE id = :id"),
+                {"id": source_id},
+            )
+        ).scalar()
+        # The canonical twin ingest would have written for this row.
+        await db.execute(
+            text("""
+                INSERT INTO scraped_jobs
+                    (source_site, source_row_id, scan_run_id, job_url, scrape_time,
+                     matched, title)
+                SELECT 'linkedin', id, scan_run_id, job_url, scrape_time, FALSE,
+                       'Claim Fixture'
+                  FROM linkedin_jobs WHERE id = :id
+            """),
+            {"id": source_id},
+        )
+        await db.commit()
+
+    async with AsyncSessionLocal() as db:
+        await claim_unmatched_rows(db)
+        await db.commit()
+
+    async with AsyncSessionLocal() as db:
+        canonical_matched = (
+            await db.execute(
+                text("SELECT matched FROM scraped_jobs WHERE source_row_id = :id"),
+                {"id": source_id},
+            )
+        ).scalar()
+        assert canonical_matched is True, (
+            "canonical row still reports unclaimed after its per-source row was claimed"
+        )
+
+        # SC-010: the pair must never disagree about being claimed.
+        disagreements = (
+            await db.execute(
+                text("""
+                    SELECT count(*) FROM scraped_jobs s
+                    JOIN linkedin_jobs l ON l.id = s.source_row_id
+                     WHERE s.matched <> l.matched
+                """)
+            )
+        ).scalar()
+        assert disagreements == 0, (
+            f"{disagreements} pairs disagree about matched between the two tables"
+        )
+        await db.commit()
+
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            text("DELETE FROM scraped_jobs WHERE source_row_id = :id"), {"id": source_id}
+        )
+        await db.execute(
+            text("DELETE FROM linkedin_jobs WHERE id = :id"), {"id": source_id}
+        )
+        await db.commit()
+
+    print("[OK] claim reaches the canonical row; no matched disagreement (SC-010)")
+
+
 async def test_idempotent_claim_scoped() -> None:
     """Idempotent UPDATE pattern scoped to test rows only."""
     async with AsyncSessionLocal() as db:
@@ -218,6 +298,7 @@ async def test_atomic_three_table_claim() -> None:
 
 async def main() -> None:
     await test_basic_claim()
+    await test_claim_reaches_canonical_row()
     await test_idempotent_claim_scoped()
     await test_atomic_three_table_claim()
     print("[OK] all matched-claim smoke tests complete")

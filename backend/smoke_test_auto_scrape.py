@@ -323,67 +323,55 @@ async def main() -> None:
     from models.auto_scrape_cycle import AutoScrapeCycle
     from models.auto_scrape_state import AutoScrapeState
     from models.extension_run_log import ExtensionRunLog
-    from models.scraped_job import ScrapedJob
 
-    u = uuid.uuid4()
-    u2 = uuid.uuid4()
-    u3 = uuid.uuid4()
-    async with AsyncSessionLocal() as db:
-        j_empty_title = ScrapedJob(
-            id=u,
-            website="linkedin",
-            job_title="",
-            company="co",
-            job_url=f"https://example.com/{u}",
-            job_description="x" * 60,
-        )
-        old = datetime.now(timezone.utc) - timedelta(days=2)
-        j_bad_jd = ScrapedJob(
-            id=u2,
-            website="linkedin",
-            job_title="t",
-            company="c",
-            job_url=f"https://example.com/{u2}",
-            job_description="short",
-            created_at=old,
-            updated_at=old,
-        )
-        j_bad_site = ScrapedJob(
-            id=u3,
-            website="not-a-site",
-            job_title="t",
-            company="c",
-            job_url=f"https://example.com/{u3}",
-            job_description="y" * 60,
-        )
-        db.add_all([j_empty_title, j_bad_jd, j_bad_site])
-        await db.commit()
-        ok("inserted 3 invalid jobs for cleanup test")
-
+    # The job-deletion sweeps this section used to exercise are retired, so the fixtures
+    # that fed them are gone too. They constructed rows in the old single-site
+    # scraped_jobs shape (website / job_title / job_description / created_at), which the
+    # unified table no longer has.
+    #
+    # The sweeps were not ported: scraped_jobs is a derived table holding exactly one
+    # canonical row per per-source row, so deleting a canonical row alone would break
+    # that correspondence, and deleting the per-source row too is not a permitted
+    # mutation on the raw store. Aged rows are reclaimed by auto-expiration instead
+    # (see smoke_test_auto_expiration.py).
+    #
+    # What still matters here is that the endpoint keeps its contract: it responds, and
+    # it still reports every key — the retired counters simply read 0 — so existing
+    # consumers do not break.
     async with httpx.AsyncClient(
         base_url=BASE, headers=HEADERS, timeout=60.0
     ) as client:
         cl = await client.post("/admin/cleanup-invalid-entries", json={})
         if cl.status_code != 200:
-            fail(f"cleanup after inserts {cl.status_code}")
+            fail(f"cleanup-invalid-entries {cl.status_code}")
         else:
             b = cl.json()
-            if (
-                b["deleted_jobs_empty_core"] < 1
-                or b["deleted_jobs_empty_jd"] < 1
-                or b["deleted_jobs_mismatched_website"] < 1
-            ):
-                fail(f"cleanup counts unexpected {b}")
+            missing = [
+                k
+                for k in (
+                    "deleted_jobs_empty_core",
+                    "deleted_jobs_empty_jd",
+                    "deleted_jobs_mismatched_website",
+                    "marked_failed_run_logs",
+                    "marked_failed_dedup_tasks",
+                )
+                if k not in b
+            ]
+            retired_nonzero = {
+                k: b[k]
+                for k in (
+                    "deleted_jobs_empty_core",
+                    "deleted_jobs_empty_jd",
+                    "deleted_jobs_mismatched_website",
+                )
+                if b.get(k) != 0
+            }
+            if missing:
+                fail(f"cleanup response dropped keys {missing}; consumers would break")
+            elif retired_nonzero:
+                fail(f"retired sweeps reported deletions: {retired_nonzero}")
             else:
-                ok("cleanup-invalid-entries deleted invalid jobs")
-
-    async with AsyncSessionLocal() as db:
-        for jid in (u, u2, u3):
-            r = await db.execute(select(ScrapedJob).where(ScrapedJob.id == jid))
-            if r.scalar_one_or_none() is not None:
-                fail(f"job {jid} should be deleted")
-        await db.commit()
-    ok("verified invalid jobs removed")
+                ok("cleanup-invalid-entries keeps all keys; retired sweeps report 0")
 
     log_id: str | None = None
     async with httpx.AsyncClient(
@@ -688,11 +676,15 @@ async def main() -> None:
                             f"{cr['shelf_life_days']!r}"
                         )
                     else:
+                        # scraped_jobs joined the three per-source tables here when
+                        # expiration started covering the canonical rows too: a canonical
+                        # row must not outlive the per-source row it was projected from.
                         for table, count in cr["deleted_per_table"].items():
                             if table not in {
                                 "linkedin_jobs",
                                 "indeed_jobs",
                                 "glassdoor_jobs",
+                                "scraped_jobs",
                             }:
                                 fail(
                                     "Phase 4c unexpected table in "
@@ -705,6 +697,11 @@ async def main() -> None:
                                     f"is {count!r}"
                                 )
                                 break
+                        if "scraped_jobs" not in cr["deleted_per_table"]:
+                            fail(
+                                "Phase 4c deleted_per_table omits scraped_jobs; "
+                                "canonical rows would outlive their per-source rows"
+                            )
 
                 if not FAILED:
                     if c0.get("dedup_task_id") is not None:

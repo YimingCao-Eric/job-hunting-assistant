@@ -1,17 +1,18 @@
 import uuid
+from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Float,
     ForeignKey,
     Index,
-    Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func, text
 
@@ -19,19 +20,38 @@ from core.database import Base
 
 
 class ScrapedJob(Base):
+    """Unified, site-agnostic scraped posting — one canonical row per posting per site.
+
+    A **derived** table, not a raw one. Every row is written by dual-write at ingest:
+    the per-source row (linkedin_jobs / indeed_jobs / glassdoor_jobs) and this row are
+    inserted in one transaction, committing together or not at all. The per-source
+    tables remain the faithful, source-shaped store of record; this table is the
+    comparable projection that the Jobs listing reads and that matching will consume.
+
+    Exactly three mutations are permitted:
+      1. `matched` false -> true (claim), kept in sync with the per-source row
+      2. `dismissed` set by the user
+      3. auto-expiration DELETE
+    No other in-place update.
+
+    Invariants (upheld by code, not by the database — see `source_row_id`):
+      - a row exists here iff its per-source row exists
+      - a row never outlives its per-source row
+      - `matched` agrees with the per-source row at all times
+      - `scrape_time` is identical to the per-source row's
+    """
+
     __tablename__ = "scraped_jobs"
 
+    # Exactly three indexes: primary key, unique, and the foreign key. Speculative
+    # indexes beyond these need a demonstrated need; none exists at 0 rows. Notably
+    # absent, and deliberately so: source_site (cardinality 3) and posted_at.
     __table_args__ = (
-        UniqueConstraint("job_url", name="ix_scraped_jobs_job_url"),
-        Index("ix_scraped_jobs_raw_description_hash", "raw_description_hash"),
-        Index("ix_scraped_jobs_company_title", "company", "job_title"),
-        Index("ix_scraped_jobs_post_datetime", "post_datetime"),
+        UniqueConstraint("job_url", name="scraped_jobs_job_url_key"),
         Index("ix_scraped_jobs_scan_run_id", "scan_run_id"),
-        Index("ix_scraped_jobs_dismissed", "dismissed"),
-        Index("ix_scraped_jobs_match_level", "match_level"),
-        Index("ix_scraped_jobs_matched_at", "matched_at"),
-        Index("ix_scraped_jobs_skip_reason", "skip_reason"),
     )
+
+    # --- Provenance ---------------------------------------------------------
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -39,86 +59,81 @@ class ScrapedJob(Base):
         default=uuid.uuid4,
         server_default=text("gen_random_uuid()"),
     )
-    website: Mapped[str] = mapped_column(String, nullable=False, default="linkedin")
-    job_title: Mapped[str] = mapped_column(String, nullable=False)
-    company: Mapped[str | None] = mapped_column(String, nullable=True)
-    location: Mapped[str | None] = mapped_column(String, nullable=True)
-    job_description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    job_url: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
-    apply_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    easy_apply: Mapped[bool] = mapped_column(Boolean, default=False)
-    post_datetime: Mapped[str | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    search_filters: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    voyager_raw: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    raw_description_hash: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    ingest_source: Mapped[str] = mapped_column(
-        String, default="extension", server_default=text("'extension'")
-    )
-    scan_run_id: Mapped[uuid.UUID | None] = mapped_column(
+
+    # 'linkedin' | 'indeed' | 'glassdoor'. Identifies the origin table on its own;
+    # there is deliberately no source_table column.
+    source_site: Mapped[str] = mapped_column(String(16), nullable=False)
+
+    # The per-source row's id. Polymorphic across the three per-source tables, so no
+    # ForeignKey is declared -- a Postgres FK targets exactly one table. This is why
+    # the 1:1 correspondence cannot be delegated to ON DELETE CASCADE and is instead
+    # held by matched predicates at ingest, claim, and auto-expiration.
+    source_row_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+    # Site-native id: job_posting_id (LinkedIn) / jobkey (Indeed) / listing_id (Glassdoor)
+    site_job_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    scan_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extension_run_logs.id"),
-        nullable=True,
-    )
-    original_job_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey(
-            "scraped_jobs.id",
-            use_alter=True,
-            name="fk_scraped_jobs_original_job_id",
-        ),
-        nullable=True,
-    )
-    dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
-    skip_reason: Mapped[str | None] = mapped_column(String, nullable=True)
-    dedup_similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    dedup_original_job_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("scraped_jobs.id", ondelete="SET NULL"),
-        nullable=True,
-    )
-    created_at: Mapped[str] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[str] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        ForeignKey("extension_run_logs.id", ondelete="RESTRICT"),
+        nullable=False,
     )
 
-    # Step 3 matching columns
-    match_level: Mapped[str | None] = mapped_column(String, nullable=True)
-    match_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    fit_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    req_coverage: Mapped[float | None] = mapped_column(Float, nullable=True)
-    confidence: Mapped[str | None] = mapped_column(String, nullable=True)
-    # Matching-phase skip — set by gates / matching when a job is filtered
-    # post-scrape (e.g. outside salary range).
-    # Distinct from skip_reason (scrape-time skip: phantom, duplicate, etc.).
-    match_skip_reason: Mapped[str | None] = mapped_column(String, nullable=True)
-    required_skills: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    nice_to_have_skills: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    critical_skills: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    extracted_yoe: Mapped[float | None] = mapped_column(Float, nullable=True)
-    salary_min_extracted: Mapped[float | None] = mapped_column(Float, nullable=True)
-    salary_max_extracted: Mapped[float | None] = mapped_column(Float, nullable=True)
-    remote_type: Mapped[str | None] = mapped_column(String, nullable=True)
-    seniority_level: Mapped[str | None] = mapped_column(String, nullable=True)
-    job_type: Mapped[str | None] = mapped_column(String, nullable=True)
-    jd_incomplete: Mapped[bool] = mapped_column(Boolean, default=False)
-    matched_at: Mapped[str | None] = mapped_column(
+    job_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+
+    # Always written explicitly from the per-source row; the server_default is a
+    # backstop, never the intended source. Auto-expiration deletes from this table
+    # with the same predicate as the per-source tables, so the values must match.
+    scrape_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    # --- Mutable state ------------------------------------------------------
+
+    matched: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    dismissed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    # --- Canonical business fields ------------------------------------------
+
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    company: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Tri-state: True / False / None. None means the site did not say, which is not
+    # the same claim as "not remote".
+    remote: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    apply_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    experience_level: Mapped[str | None] = mapped_column(Text, nullable=True)
+    industry: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # --- Salary -------------------------------------------------------------
+    # Amounts as the source quoted them, against the normalized period. Never
+    # converted between periods, never annualized.
+
+    salary_min: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    salary_max: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    salary_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+
+    # Normalized vocabulary, exactly five values:
+    # HOURLY | DAILY | WEEKLY | MONTHLY | ANNUAL. None when the source token is
+    # unrecognized -- the amounts are still retained.
+    salary_period: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # --- Dates --------------------------------------------------------------
+
+    # Normalized to one point-in-time representation across all three sites: from
+    # epoch-ms (LinkedIn listed_at, Indeed pub_date) and from a calendar date
+    # (Glassdoor date_posted). The raw source form is never stored here.
+    posted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
-    other_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    education_req_degree: Mapped[str | None] = mapped_column(String, nullable=True)
-    education_req_field: Mapped[str | None] = mapped_column(String, nullable=True)
-    education_field_qualified: Mapped[bool | None] = mapped_column(
-        Boolean, nullable=True
-    )
-    visa_req: Mapped[str | None] = mapped_column(String, nullable=True)
-    blocking_gap: Mapped[str | None] = mapped_column(String, nullable=True)
-    gap_adjacency: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    matching_mode: Mapped[str | None] = mapped_column(String, nullable=True)
-    removal_stage: Mapped[str | None] = mapped_column(String, nullable=True)
+    # No source_raw: raw payloads stay on the per-source rows, reachable via
+    # source_row_id. No dedup or matching columns -- when matching returns, its
+    # attributes belong here rather than on the per-source tables.
