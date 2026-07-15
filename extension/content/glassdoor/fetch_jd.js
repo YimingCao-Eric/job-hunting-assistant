@@ -403,13 +403,28 @@ function jdFromRenderedDom(doc) {
   return stripHtmlToStructuredText(descEl.innerHTML);
 }
 
+/**
+ * Pin a listing URL to the current page's origin.
+ * Glassdoor hands back locale subdomains (e.g. fr.glassdoor.ca) in listing links; fetching
+ * one from a www.glassdoor.ca page is cross-origin and CORS-blocked, so keep path + query
+ * and take protocol/host from the page.
+ */
+function toSameOriginUrl(jobUrl) {
+  try {
+    const u = new URL(jobUrl, location.origin);
+    u.protocol = location.protocol;
+    u.host = location.host;
+    return u.href;
+  } catch {
+    return jobUrl;
+  }
+}
+
 async function fetchGlassdoorJD(jobUrl, jl) {
   if (!jobUrl) return null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const safeUrl = jobUrl
-      .replace("https://www.glassdoor.com/", "https://www.glassdoor.ca/")
-      .replace("https://glassdoor.com/", "https://www.glassdoor.ca/");
+    const safeUrl = toSameOriginUrl(jobUrl);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), GLASSDOOR_JD_FETCH_TIMEOUT_MS);
