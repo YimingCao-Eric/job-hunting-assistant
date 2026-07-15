@@ -7,7 +7,6 @@ from sqlalchemy.sql import ColumnElement
 
 from core.auth import get_current_user
 from core.database import get_db
-from models.dedup_task import DedupTask
 from models.extension_run_log import ExtensionRunLog
 from models.scraped_job import ScrapedJob
 from schemas.auto_scrape import CleanupInvalidEntriesResponse
@@ -87,22 +86,9 @@ async def cleanup_invalid_entries(
     )
     marked_failed_run_logs = result4.rowcount or 0
 
-    result5 = await db.execute(
-        update(DedupTask)
-        .where(
-            DedupTask.status == "running",
-            or_(
-                DedupTask.last_heartbeat_at < ten_min_ago,
-                DedupTask.last_heartbeat_at.is_(None),
-            ),
-        )
-        .values(
-            status="failed",
-            error_message="Marked failed by cleanup-invalid-entries (>10 min stale heartbeat)",
-            completed_at=now,
-        )
-    )
-    marked_failed_dedup_tasks = result5.rowcount or 0
+    # Dedup pipeline removed (search-only backend); dedup_tasks are no longer
+    # written. Response key retained (always 0) for forward-compatibility.
+    marked_failed_dedup_tasks = 0
 
     return CleanupInvalidEntriesResponse(
         deleted_jobs_empty_core=deleted_empty_core,

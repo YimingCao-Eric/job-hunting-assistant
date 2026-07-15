@@ -12,13 +12,9 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from core.auth import get_current_user
 from core.config import settings
-from core.config_file import read_config_file
-from core.database import AsyncSessionLocal, get_db
-from dedup.service import run_dedup
-from models.dedup_task import DedupTask
+from core.database import get_db
 from models.extension_run_log import ExtensionRunLog
 from models.extension_state import ExtensionState
-from schemas.config import SearchConfigRead
 from schemas.extension import ExtensionStateRead, ExtensionStateUpdate, TriggerScanRequest
 from schemas.debug_log import DebugLogAppend
 from schemas.run_log import RunLogCreate, RunLogRead, RunLogUpdate
@@ -28,89 +24,11 @@ router = APIRouter(prefix="/extension", tags=["extension"])
 
 logger = logging.getLogger(__name__)
 
-# Fire-and-forget background tasks for post-scan dedup.
-_BACKGROUND_TASKS: set[asyncio.Task] = set()
-
 
 def _run_log_search_placeholder(value: str | None) -> str:
     if value is None or not str(value).strip():
         return "(setup pending)"
     return str(value)
-
-
-async def _run_dedup_for_scan(log_id: UUID) -> None:
-    """
-    Runs full dedup after a scan completes. Uses its own DB session — the request
-    session is closed after the PUT response.
-    """
-    task_id: UUID | None = None
-    async with AsyncSessionLocal() as db:
-        task = DedupTask(
-            scan_run_id=log_id,
-            status="running",
-            trigger="post_scan",
-        )
-        db.add(task)
-        await db.commit()
-        await db.refresh(task)
-        task_id = task.id
-
-    async def heartbeat_updater() -> None:
-        while True:
-            await asyncio.sleep(30)
-            try:
-                async with AsyncSessionLocal() as hb_db:
-                    result = await hb_db.execute(
-                        select(DedupTask).where(DedupTask.id == task_id)
-                    )
-                    fresh = result.scalar_one_or_none()
-                    if fresh is None or fresh.status != "running":
-                        return
-                    fresh.last_heartbeat_at = datetime.now(timezone.utc)
-                    await hb_db.commit()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Dedup heartbeat update failed")
-
-    hb_task = asyncio.create_task(heartbeat_updater())
-
-    try:
-        async with AsyncSessionLocal() as db:
-            config_data = await read_config_file()
-            cfg = SearchConfigRead(**config_data)
-            await run_dedup(
-                db=db,
-                config=cfg,
-                settings=settings,
-                scan_run_id=log_id,
-                trigger="post_scan",
-            )
-            await db.commit()
-
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(DedupTask).where(DedupTask.id == task_id))
-            t = result.scalar_one_or_none()
-            if t:
-                t.status = "completed"
-                t.completed_at = datetime.now(timezone.utc)
-                await db.commit()
-    except Exception as e:
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(select(DedupTask).where(DedupTask.id == task_id))
-            t = result.scalar_one_or_none()
-            if t:
-                t.status = "failed"
-                t.error_message = str(e)
-                t.completed_at = datetime.now(timezone.utc)
-                await db.commit()
-        logger.exception("Auto dedup failed for scan run %s", log_id)
-    finally:
-        hb_task.cancel()
-        try:
-            await hb_task
-        except asyncio.CancelledError:
-            pass
 
 
 # ---------------------------------------------------------------------------
@@ -491,22 +409,6 @@ async def update_run_log(
 
     await db.flush()
     await db.refresh(log)
-
-    if body.status == "completed" and prior_status != "completed":
-        config_data = await read_config_file()
-        cfg = SearchConfigRead(**config_data)
-        if cfg.dedup_mode == "sync":
-            should_dedup = True
-            if log.scan_all:
-                should_dedup = (
-                    log.scan_all_position is not None
-                    and log.scan_all_total is not None
-                    and log.scan_all_position == log.scan_all_total
-                )
-            if should_dedup:
-                task = asyncio.create_task(_run_dedup_for_scan(log_id))
-                _BACKGROUND_TASKS.add(task)
-                task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     await broadcast_run_log_update(log)
     return log

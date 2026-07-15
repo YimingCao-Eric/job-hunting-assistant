@@ -4,9 +4,9 @@ Backend post-scrape orchestrator.
 Claims cycles in scrape_complete and transitions them to post_scrape_complete.
 Infrastructure: atomic claim, heartbeat, Redis subscriber, APScheduler poll.
 
-Phase 4.5: dedup and matching pipeline bodies are no-ops pending redesign;
-when pipelines return, re-fill _run_dedup_for_cycle, _run_matching_for_cycle,
-and _compute_match_results only.
+Runs Phase 1 (auto-expiration) then Phase 2 (matched-claim), then finalizes.
+The dedup/matching phases (formerly Phase 4-6) have been removed (search-only
+backend); cycle output is cleanup_results + match_results={"claim_summary": ...}.
 
 Wake paths: Redis pub/sub (instant) + APScheduler 1-min poll (fallback).
 """
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -23,20 +22,11 @@ from uuid import UUID
 from sqlalchemy import update
 
 from core.config import settings
-from core.config_file import read_config_file
 from core.database import AsyncSessionLocal
 from core.redis_client import REDIS_CHANNEL_AUTO_SCRAPE
-from dedup.service import run_dedup  # noqa: F401 — Phase 4 redesign will use
 from auto_scrape.auto_expiration import run_auto_expiration
 from auto_scrape.matching_claim import claim_unmatched_rows
-from matching.pipeline import (  # noqa: F401
-    run_cpu_score_pipeline,
-    run_cpu_work,
-    run_llm_extraction_gates,
-    run_llm_score_pipeline,
-)
 from models.auto_scrape_cycle import AutoScrapeCycle
-from schemas.config import SearchConfigRead
 
 logger = logging.getLogger(__name__)
 
@@ -160,35 +150,6 @@ async def _heartbeat_loop(cycle_id: UUID) -> None:
             )
 
 
-async def _run_dedup_for_cycle(cycle_id: UUID) -> UUID | None:
-    """
-    Phase 4.5: dedup pipeline disabled pending redesign.
-    Returns None so cycle.dedup_task_id stays NULL.
-    """
-    logger.info(
-        "Post-scrape cycle %s: dedup skipped (Phase 4.5: pipeline disabled)",
-        cycle_id,
-    )
-    return None
-
-
-async def _run_matching_for_cycle(
-    cycle_id: UUID, llm_enabled: bool, has_openai_key: bool
-) -> None:
-    """Phase 4.5: matching pipeline disabled pending redesign."""
-    logger.info(
-        "Post-scrape cycle %s: matching skipped (Phase 4.5: pipeline disabled)",
-        cycle_id,
-    )
-
-
-async def _compute_match_results(
-    post_scrape_started_at: datetime,
-) -> dict[str, Any]:
-    """Phase 4.5: matching disabled, so no aggregation. Return empty dict."""
-    return {}
-
-
 async def _update_cycle(cycle_id: UUID, **fields: Any) -> None:
     fields["phase_heartbeat_at"] = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
@@ -201,23 +162,12 @@ async def _update_cycle(cycle_id: UUID, **fields: Any) -> None:
 
 
 async def run_post_scrape_phase(cycle_id: UUID) -> None:
-    post_scrape_started_at = datetime.now(timezone.utc)
     hb_task: asyncio.Task | None = None
     try:
         hb_task = asyncio.create_task(_heartbeat_loop(cycle_id))
         _active_heartbeat_tasks[cycle_id] = hb_task
 
-        config_data = await read_config_file()
-        cfg = SearchConfigRead(**config_data)
-        llm_enabled = bool(cfg.llm)
-        has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
-
-        logger.info(
-            "Post-scrape cycle %s: start (llm=%s, openai_key=%s)",
-            cycle_id,
-            llm_enabled,
-            has_openai_key,
-        )
+        logger.info("Post-scrape cycle %s: start", cycle_id)
 
         async with AsyncSessionLocal() as db:
             async with db.begin():
@@ -229,23 +179,12 @@ async def run_post_scrape_phase(cycle_id: UUID) -> None:
                 claim_results = await claim_unmatched_rows(db)
         claim_summary = {site: len(rows) for site, rows in claim_results.items()}
 
-        dedup_task_id = await _run_dedup_for_cycle(cycle_id)
-        await _update_cycle(cycle_id, dedup_task_id=dedup_task_id)
-        logger.info("Post-scrape cycle %s: dedup finished", cycle_id)
-
-        await _run_matching_for_cycle(cycle_id, llm_enabled, has_openai_key)
-        logger.info("Post-scrape cycle %s: matching finished", cycle_id)
-
-        match_results = await _compute_match_results(post_scrape_started_at)
         await _update_cycle(
             cycle_id,
-            match_results={
-                "claim_summary": claim_summary,
-                **match_results,
-            },
+            match_results={"claim_summary": claim_summary},
         )
         logger.info(
-            "Post-scrape cycle %s: match_results=%s", cycle_id, match_results
+            "Post-scrape cycle %s: claim_summary=%s", cycle_id, claim_summary
         )
 
         await _update_cycle(

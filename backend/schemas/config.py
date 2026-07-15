@@ -26,7 +26,6 @@ class SearchConfigRead(BaseModel):
     salary_min: int = 0
     linkedin_f_tpr: str | None = None
     glassdoor: dict | None = None
-    dedup_mode: str = "manual"
     blacklist_companies: list[str] = []
     blacklist_locations: list[str] = []
     blacklist_titles: list[str] = []
@@ -37,7 +36,6 @@ class SearchConfigRead(BaseModel):
     needs_sponsorship: bool = False
     no_agency: bool = False
     dedup_fuzzy_threshold: int = 85
-    llm: bool = False
     nth_bonus_weight: float = 0.10
     cpu_strong_threshold: float = 0.85
     cpu_binary_threshold: float = 0.50
@@ -66,7 +64,6 @@ class SearchConfigUpdate(BaseModel):
     salary_min: int | None = None
     linkedin_f_tpr: str | None = None
     glassdoor: dict | None = None
-    dedup_mode: Optional[str] = None
     blacklist_companies: Optional[list[str]] = None
     blacklist_locations: Optional[list[str]] = None
     blacklist_titles: Optional[list[str]] = None
@@ -77,7 +74,6 @@ class SearchConfigUpdate(BaseModel):
     needs_sponsorship: Optional[bool] = None
     no_agency: Optional[bool] = None
     dedup_fuzzy_threshold: Optional[int] = None
-    llm: Optional[bool] = None
     nth_bonus_weight: Optional[float] = None
     cpu_strong_threshold: Optional[float] = None
     cpu_binary_threshold: Optional[float] = None
