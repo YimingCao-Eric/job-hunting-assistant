@@ -1,170 +1,152 @@
-# Job Hunting Assistant — Frontend
+# JHA Frontend
 
-Single-page app for **search configuration**, **profile / resume**, **job list**, **run logs** (scan runs, dedup reports, pipeline match reports, and **issue reports**), **skill candidate review**, **matching pipeline** (dedup + extraction + gates + CPU score + optional **LLM re-score**), and **dedup** controls. It talks to the FastAPI backend over **REST** using `api.js` and bearer auth. The **Jobs** page also opens a **WebSocket** (**`/ws/run-log`**) with the same token (see backend README) so scan progress updates without aggressive polling.
+The search-only frontend: **four pages, one shell, one visual system, one access layer.**
 
-For Docker-based full-stack setup, see the [repository root README](../README.md).
+Vite + React 18 + TypeScript, TanStack Query, Tailwind, react-router (data router).
 
-Extension ingest payloads and DB columns are documented under **`docs/scrape-fields-*.md`** at the repo root (LinkedIn, Indeed, Glassdoor).
+It replaces the previous frontend, which mixed JS and TS, carried four styling systems
+with no shared tokens, had three data-access layers, and served four pages whose
+backend endpoints no longer existed. That app is gone; it remains in git history at
+`d738bc1` if you ever need to look something up.
 
-## Stack
-
-| Layer | Technology |
-| --- | --- |
-| UI | [React 18](https://react.dev/) |
-| Routing | [React Router v6](https://reactrouter.com/) |
-| Build | [Vite 8](https://vite.dev/) (dev server default port **5173**) |
-| Styling | CSS modules (`*.module.css`); **Tailwind** utilities for **Auto-scrape** dashboard (preflight off — see `tailwind.config.js`) |
-| Auto-scrape UI | TypeScript (`.tsx`) under `src/app/(dashboard)/…`, `src/components/auto-scrape/`, `src/lib/api/autoScrape.ts` |
-
-## Layout
-
-```
-frontend/
-├── index.html
-├── vite.config.js       dev server: host 0.0.0.0, port 5173; `@` → `src/`
-├── tailwind.config.js   Tailwind (preflight off; utilities for auto-scrape)
-├── postcss.config.js
-├── tsconfig.json        TypeScript path alias `@/*`
-├── package.json
-├── Dockerfile           dev-mode image (npm run dev)
-├── src/
-│   ├── main.jsx         React root
-│   ├── App.jsx          Routes + nav (includes **Sidebar** with Auto-scrape link)
-│   ├── app/
-│   │   └── (dashboard)/auto-scrape/page.tsx   Auto-scrape dashboard (client page)
-│   ├── api.js           Central fetch wrapper (VITE_API_URL, VITE_AUTH_TOKEN)
-│   ├── lib/api/
-│   │   └── autoScrape.ts    **`/admin/auto-scrape`** REST helpers (+ instances poll)
-│   ├── hooks/
-│   │   └── useScanGrace.js    Short post-scan grace before treating a run as finished
-│   ├── pages/
-│   │   ├── ConfigPage.jsx
-│   │   ├── ProfilePage.jsx     Resume upload, parsed profile, skills
-│   │   ├── JobsPage.jsx        Scans, Scan All, job grid, filters; **`WebSocket /ws/run-log`** + adaptive poll interval
-│   │   ├── LogsPage.jsx        Search runs (expandable **Debug trace**); Dedup / Matching run reports (same **Debug trace** when **`debug_log`** present); **Reports** (issue reports from Matching)
-│   │   ├── SkillsPage.jsx      Skill alias candidates (approve / merge / reject)
-│   │   ├── MatchingPage.jsx    Pipeline buttons (CPU / LLM extract / CPU score / LLM score), filters, job grid, **report flag** per card
-│   │   └── DedupPage.jsx       Dedup mode, run/reset, filter pills, job grid
-│   ├── components/
-│   │   ├── layout/Sidebar.tsx     Top nav (Config, Jobs, …, **Auto-scrape**)
-│   │   ├── auto-scrape/           StatusHeader, CurrentCycle, CycleHistory, SessionHealth, ConfigEditor
-│   │   ├── PageTitle.jsx, Spinner.jsx, JobCard.jsx, JobModal.jsx, DebugTracePanel.jsx
-│   │   ├── DedupSkipBadge.jsx  Dedup skip reason + lazy fetch for dedup_original_job
-│   │   ├── MatchBadge.jsx, MatchSkipBadge.jsx  Match level / gate skip UI
-│   └── utils/
-│       ├── glassdoorUrl.js   Glassdoor SERP / job URL helpers
-│       ├── location.js
-│       ├── runLog.js
-│       └── time.js
-└── .env.example
-```
-
-## Routes
-
-| Path | Page |
-| --- | --- |
-| `/` | Config — search config, dedup mode, LLM toggle, site filters, URL previews |
-| `/profile` | Profile — resume upload, parsed fields, skills for matching |
-| `/jobs` | Jobs — list, filters, scans (LinkedIn / Indeed / Glassdoor / **Scan All**), live run-log row via **WebSocket** (fallback: poll run logs every **2s** when disconnected, **10s** when connected) |
-| `/logs` | Logs — **Search** (run logs; **Debug trace** from `debug_log.events`), **Dedup** / **Matching** (pipeline metrics + **Debug trace** on each report card when present), **Reports** (user issue reports; filter by status, dismiss, open job in Matching) |
-| `/skills` | Skills — review skill alias candidates from JD extraction |
-| `/matching` | Matching — **All CPU work** (dedup + `cpu_only` match), LLM extraction + gates, CPU score, optional **LLM re-score** (`llm_score`); removed/passed filters with gate pills; **`?job=<uuid>`** opens the job modal (e.g. from **Logs → Reports → View job**). On load, **`GET /match/status`** rehydrates the running spinner if the backend still has a pipeline task; long runs poll **`GET /match/reports`** with extended timeouts (up to **30 minutes** for LLM-heavy buttons). |
-| `/dashboard/auto-scrape` | **Auto-scrape** — orchestrator status, enable/pause/shutdown, session health (CAPTCHA / reset), **Configuration** (**`PUT /admin/auto-scrape/config`** with **`enabled_sites`** and **`keywords`**; extension reads fresh config each cycle), cycle history, multi-instance warning (**polls every 5s**; uses **`src/lib/api/autoScrape.ts`**) |
-| `/dedup` | Dedup — manual/sync mode, run dedup, reset, All / Passed / Removed filters (route only; no top-nav link — use URL or bookmark) |
-
-Legacy routes **`/search-report`** → **`/logs`**; **`/dedup/passed`** / **`/dedup/removed`** → **`/matching`** (redirects).
-
-The extension popup only syncs a **subset** of fields; use **Config** for full control (`website`, Glassdoor, `dedup_mode`, etc.).
-
-## Environment
-
-Copy [`.env.example`](./.env.example) to `.env` (Vite reads `VITE_*` variables at build/dev time).
-
-| Variable | Purpose |
-| --- | --- |
-| `VITE_API_URL` | Backend base URL (default `http://localhost:8000`) |
-| `VITE_AUTH_TOKEN` | Bearer token sent as `Authorization: Bearer …` (default `dev-token` in development) |
-
-## Local development
+## Quick start
 
 ```bash
 cd frontend
 npm install
-npm run dev
+cp .env.example .env      # VITE_API_URL, VITE_AUTH_TOKEN
+npm run dev               # http://localhost:5173
 ```
 
-Open **http://localhost:5173**. The dev server binds to all interfaces (`host: true` in `vite.config.js`) so you can reach it from other devices on the LAN if needed.
-
-### Production build
+Or via compose, which bind-mounts `./frontend/src`:
 
 ```bash
-npm run build
+docker compose up -d --build frontend   # http://localhost:5173
 ```
 
-Static output is written to `dist/`. Serve with any static host; set `VITE_API_URL` / `VITE_AUTH_TOKEN` at **build** time so they are baked into the bundle.
+The backend must be up (`docker compose up -d backend postgres redis`). No backend
+change is needed for the dev port: CORS admits any `http://localhost:<port>`.
+**LAN IPs and `https://localhost` are not admitted** — reach the dev server via
+`localhost`, not a LAN address.
 
-```bash
-npm run preview   # optional: local preview of dist/
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Vite dev server on 5173 |
+| `npm run build` | Production build |
+| `npm run typecheck` | `tsc --noEmit` over **both** projects (`src/` and the build config) |
+| `npm run lint` | ESLint over `**/*.{ts,tsx}` with `typescript-eslint` + `react-hooks` |
+| `npm run test` | Vitest — pure logic only |
+| **`npm run verify`** | **typecheck && lint && test — the gate. Run this before every commit.** |
+
+There is **no CI** in this repo, so `verify` is the gate a human runs.
+
+## Environment
+
+| Var | Default | Notes |
+|---|---|---|
+| `VITE_API_URL` | `http://localhost:8000` | Backend base URL |
+| `VITE_AUTH_TOKEN` | `dev-token` | Bearer token |
+
+⚠️ **Both are baked into the bundle at BUILD time**, so the token ships inside the
+production JS. This is unchanged from the previous app and is accepted by the spec
+(single operator, trusted self-hosted deployment). It also means changing the token
+requires a **restart**, not a page reload — the 401 screen says so.
+
+`NEXT_PUBLIC_*` is not read. Vite only exposes `VITE_*` on `import.meta.env`, so the
+old app's `NEXT_PUBLIC_API_BASE` fallback was always `undefined`.
+
+## The four routes
+
+Each page binds to **exactly one** backend surface.
+
+| Route | Page | Backend surface |
+|---|---|---|
+| `/` | Config | `/config` |
+| `/jobs` | Jobs | `/jobs` (+ `/extension/*` for scan control) |
+| `/logs` | Logs | `/extension/run-log` |
+| `/dashboard/auto-scrape` | Auto-Scrape | `/admin/auto-scrape/*` |
+| `*` | Not found | none |
+
+`src/lib/nav.ts` is the single source of both the nav and the routes, so they cannot
+drift. Legacy URLs (`/profile`, `/skills`, `/matching`, `/dedup`, …) land on a
+"page removed" state — **not** a redirect, because those endpoints are gone and a
+redirect would imply they merely moved.
+
+## Rules that are enforced, not just documented
+
+**Two ESLint rules fail the build**, because both failures are otherwise silent:
+
+1. **`/extension/pending*` is forbidden.** Those three routes are `GET`s that *mutate
+   and commit*: one call clears the flag, steals the extension's queued command, and
+   **the scan then silently never runs** — no error, nothing to debug. They look like
+   reads. Use `GET /extension/state`, which does not consume.
+2. **`fetch()` only in `src/lib/api/client.ts`.** The old app had three access layers;
+   several of its methods never checked `response.ok`.
+
+Also structural:
+
+- **`PUT /admin/auto-scrape/state` is not bound at all.** It is a whole-object replace
+  that would destroy unsent keys. Use the server-side mutators (`/enable`, `/pause`, …).
+- **`src/` is 100% TypeScript.** The old app was `strict` *and* `noEmit` yet checked
+  ~700 of 12,235 lines, because its source was `.jsx` and `allowJs` was off.
+- **Job descriptions are sanitized** (`lib/format/description.ts`) before ever reaching
+  `dangerouslySetInnerHTML`. They are untrusted third-party HTML.
+
+## Layout
+
+```
+src/
+├── pages/        one file per route
+├── components/
+│   ├── ui/       the ONLY owner of visual treatment (+ states/)
+│   ├── layout/   TopNav
+│   └── jobs|logs|config|auto-scrape/
+├── lib/
+│   ├── api/      client.ts is the only fetch site
+│   ├── format/   pure, unit-tested
+│   ├── tokens/   status -> tone maps
+│   └── nav.ts    the single source of pages
+├── hooks/
+└── types/        mirrors the backend schemas; compile-time only
 ```
 
-## Docker
+**No runtime schema validation** — responses are cast, not parsed, so added backend
+keys pass through (Constitution Principle VII). Do not add Zod to the client.
 
-From the **repository root**, `docker compose` runs the frontend with hot-reload on `src/` (see root `docker-compose.yml`). The container exposes port **5173**. The backend Compose service mounts **`./data`** for **`config.json`** / **`profile.json`**; frontend does not persist data files.
+Design tokens live in `tailwind.config.ts` + `src/index.css`. Nothing outside
+`components/ui/` may declare a colour, radius or shadow.
 
-Environment in Compose sets `VITE_API_URL` and `VITE_AUTH_TOKEN` for the dev server. If the browser runs on the **host** and the API is on `localhost:8000`, that URL is correct for the browser.
+## Testing
 
-## API client (`src/api.js`)
+Vitest covers **pure logic only** — no component or DOM tests, deliberately. The one
+exception is `description.test.ts`, which runs under jsdom because it tests XSS
+sanitization, where a silent failure is a security hole.
 
-The `api` object exports methods (all requests use the shared `Authorization` header from `VITE_AUTH_TOKEN`), including:
+Covered: salary formatting, the tri-state `remote`, heartbeat grading, error
+normalization, search-preview URLs, the trace window math, the unsaved guard, and the
+sanitizer.
 
-| Method | Purpose |
-| --- | --- |
-| `getConfig` / `updateConfig` | `/config` |
-| `getJobs` | `GET /jobs` (items include **`has_report`**) |
-| `getJob` / `getJobsByDedupStatus` | Job detail and dedup-filtered lists |
-| `createJobReport` | `POST /jobs/{id}/report` |
-| `getJobReports` | `GET /jobs/reports` |
-| `getJobReportStats` | `GET /jobs/reports/stats` |
-| `actionJobReport` | `PUT /jobs/reports/{id}/action` |
-| `resetDedup` | `POST /jobs/dedup/reset` |
-| `runDedup` | `POST /jobs/dedup` |
-| `getDedupReports` | `GET /dedup/reports` |
-| `getDedupReport` | `GET /dedup/reports/{id}` |
-| `triggerScan(website, extra?)` | `POST /extension/trigger-scan` — optional **`extra`** for Scan All (`scan_all`, `scan_all_position`, `scan_all_total`) |
-| `stopScan` | `POST /extension/trigger-stop` |
-| `getRunLogs` | `GET /extension/run-log` |
-| `getExtensionState` | `GET /extension/state` |
-| `runMatching` | `POST /jobs/match` — body `{ mode?: 'cpu_only' \| 'llm_extraction_gates' \| 'cpu_score' \| 'llm_score' }`; returns **`{ status: 'started', mode }`** immediately |
-| `getMatchStatus` | `GET /match/status` — **`{ running, mode }`** for rehydrating UI after navigation |
-| `getMatchReports` / `getMatchReport` | `GET /match/reports`, `/match/reports/{id}` |
-| `getMatchExtractedCount` | `GET /jobs/match/extracted-count` |
-| `getMatchLogs` | `GET /match/logs` |
-| `runGates`, `scoreJobs`, `resetGates`, `resetScore`, `resetExtraction` | Other `/jobs/match/*` helpers |
-| `undoButton1` … `undoButton4`, `dismissJob`, `undismissJob` | Pipeline undo + dismiss endpoints |
-| `getProfile`, `saveProfile`, `uploadResume`, `parseResume`, `getProfileExtracted` | `/profile` |
-| `getSkillCandidates`, `getSkillCandidateStats`, `approveSkillCandidate`, `mergeSkillCandidate`, `rejectSkillCandidate`, `refreshSkillAliases` | `/skills/candidates/*` |
+Page behaviour is validated by hand — see
+[`specs/007-frontend-redesign/quickstart.md`](../specs/007-frontend-redesign/quickstart.md).
 
-**Matching page polling:** After **`runMatching`**, the API finishes work in a detached background task. The UI polls **`getMatchReports`** until the report count increases. Default wait is **15 minutes**; Buttons **2** and **4** use **30 minutes**. Timeout errors note that the backend task may still be running. **`getMatchStatus`** on mount restores the “running” state if you navigated away mid-run.
+## Backend traits worth knowing before you change anything
 
-## Scan All (Jobs page)
+These are real, verified against the live API, and each one has bitten someone:
 
-**Scan All** loops `linkedin` → `indeed` → `glassdoor` and calls **`triggerScan(website, { scan_all: true, scan_all_position, scan_all_total })`** so the backend can run **sync dedup** only after the **last** site completes. Single-site buttons call **`triggerScan('linkedin')`** (etc.) with no extra payload.
-
-## Auto-scrape dashboard (`/dashboard/auto-scrape`)
-
-Uses **`src/lib/api/autoScrape.ts`**: state, cycles, sessions, instances poll, **`saveConfig`** → **`PUT /admin/auto-scrape/config`** with **`enabled_sites`**, **`keywords`**, and other orchestrator fields validated by the backend. The Chrome extension reads that row via **`GET /admin/auto-scrape/config`** at **each cycle start** (not cached across cycles). **`POST /enable`** (from the dashboard) applies after save when the user starts the orchestrator.
-
-## Dedup chain repair (optional)
-
-The backend exposes **`POST /jobs/dedup/resolve-chains`** to fix rows where **`dedup_original_job_id`** still points at another removed job (one-time / idempotent DB repair). Call it with the same bearer auth as other endpoints (e.g. `curl`); it is not wrapped in `api.js` by default.
-
-## Linting
-
-```bash
-npm run lint
-```
-
-## See also
-
-- [Backend API](../backend/README.md) — endpoint reference and server logging (`docker compose logs backend`)
-- [Extension](../extension/README.md) — Chrome extension behavior
+- **`remote` is tri-state.** `null` means the site did not say — **not** "on-site".
+  Glassdoor never emits `false`, so `remote ? 'Remote' : 'On-site'` mislabels *every*
+  non-remote Glassdoor job.
+- **Salaries are plain-notation strings and are never annualized.** An `HOURLY` `"55"`
+  is $55/hr. `YEARLY` is never stored — it maps to `ANNUAL` at ingest.
+- **The backend returns four different error shapes.** `lib/api/errors.ts` normalizes
+  them. `String(detail)` yields `"[object Object]"` for two of them.
+- **Traces are included by default and are huge.** 10 runs cost 8 KB with
+  `include_debug_log=false` and **537 KB** without it.
+- **`GET /jobs` has no per-site count endpoint** — counts cost one `?source_site=X&limit=1`
+  read each.
+- **`date_from`/`date_to` compare a timestamp to bare-date midnight**, so `date_to=today`
+  drops nearly all of today. Use `scraped_from`/`scraped_to`.
+- **`GET /jobs` has no sort tiebreaker**, so offset pagination can drop/repeat a row on
+  ties. The fix is a backend secondary sort key.

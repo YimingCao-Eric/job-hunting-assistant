@@ -1,182 +1,173 @@
-"use client";
+import { useState } from 'react'
 
-import { useEffect, useState } from "react";
-import type { AutoScrapeState } from "@/types/autoScrape";
-import {
-  enableAutoScrape,
-  pauseAutoScrape,
-  shutdownAutoScrape,
-  triggerTestCycle,
-  fetchAutoScrapeInstances,
-} from "@/lib/api/autoScrape";
+import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
+import { Card } from '@/components/ui/Card'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { formatAge, formatDateTime } from '@/lib/format/datetime'
+import { heartbeatGrade, heartbeatLabel, isHeartbeatUnhealthy } from '@/lib/format/heartbeat'
+import { HEARTBEAT_TONE } from '@/lib/tokens/semantics'
+import type { useAutoScrape } from '@/hooks/useAutoScrape'
+import type { AutoScrapeInstances, AutoScrapeStateRead } from '@/types/autoScrape'
 
-export function StatusHeader({
-  state,
-  onAction,
-}: {
-  state: AutoScrapeState;
-  onAction: () => void;
-}) {
-  const [tick, setTick] = useState(0);
-  const [instanceCount, setInstanceCount] = useState(1);
+/** 0 | '0' | null all mean "unscheduled" -- the sentinel is polymorphic
+ *  (auto_scrape.py:88-98). Epoch MILLISECONDS. */
+function nextCycleLabel(value: number | string | null | undefined): string {
+  const n = typeof value === 'string' ? Number(value) : value
+  if (!n || Number.isNaN(n)) return 'Not scheduled'
+  return formatDateTime(new Date(n).toISOString())
+}
 
-  useEffect(() => {
-    const i = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(i);
-  }, []);
+export interface StatusHeaderProps {
+  state: AutoScrapeStateRead
+  instances: AutoScrapeInstances | undefined
+  instancesError: boolean
+  mutations: ReturnType<typeof useAutoScrape>['mutations']
+}
 
-  useEffect(() => {
-    const refresh = async () => {
-      try {
-        const data = await fetchAutoScrapeInstances();
-        setInstanceCount(data.count ?? 1);
-      } catch {
-        /* best-effort */
-      }
-    };
-    void refresh();
-    const interval = setInterval(() => void refresh(), 30_000);
-    return () => clearInterval(interval);
-  }, []);
+/**
+ * FR-037: enabled/paused, cycle phase, cycle number, next-cycle time.
+ * FR-038: heartbeat graded by age, with STALE PRESENTED AS A WARNING DISTINCT
+ *         FROM A DELIBERATE PAUSE.
+ * FR-039: warn when more than one extension instance reports in.
+ * FR-040: every control is a REQUEST the extension acts on asynchronously.
+ *
+ * Ported from the old StatusHeader, minus its 1s cosmetic clock and the
+ * `<span className="sr-only" aria-hidden>{tick}</span>` re-render hack -- the
+ * 5s poll already re-renders this, so a second timer bought nothing.
+ */
+export function StatusHeader({ state, instances, instancesError, mutations }: StatusHeaderProps) {
+  const [confirmShutdown, setConfirmShutdown] = useState(false)
+  const s = state.state
 
-  const isEnabled = state.state.enabled === true;
-  const isTestPending = state.state.test_cycle_pending === true;
-  const isExitRequested = state.state.exit_requested === true;
-
-  let heartbeatAgeSec: number | null = null;
-  let heartbeatColor = "bg-gray-400";
-  let heartbeatLabel = "no heartbeat";
-  if (state.last_sw_heartbeat_at) {
-    heartbeatAgeSec = Math.floor(
-      (Date.now() - new Date(state.last_sw_heartbeat_at).getTime()) / 1000
-    );
-    if (heartbeatAgeSec < 120) {
-      heartbeatColor = "bg-green-500";
-      heartbeatLabel = "live";
-    } else if (heartbeatAgeSec < 300) {
-      heartbeatColor = "bg-yellow-500";
-      heartbeatLabel = "slow";
-    } else {
-      heartbeatColor = "bg-red-500";
-      heartbeatLabel = "stale";
-    }
-  }
-
-  const formatAge = (sec: number) => {
-    if (sec < 60) return `${sec}s`;
-    if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
-    return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
-  };
-
-  const [busy, setBusy] = useState(false);
-  const wrap =
-    (fn: () => Promise<void>) =>
-    async () => {
-      if (busy) return;
-      setBusy(true);
-      try {
-        await fn();
-        onAction();
-      } finally {
-        setBusy(false);
-      }
-    };
+  const grade = heartbeatGrade(state.last_sw_heartbeat_at)
+  const unhealthy = isHeartbeatUnhealthy(grade)
+  const { enable, pause, shutdown, testCycle } = mutations
+  const busy = enable.isPending || pause.isPending || shutdown.isPending || testCycle.isPending
 
   return (
-    <div className="bg-white border rounded-lg p-6 shadow-sm">
-      <span className="sr-only" aria-hidden="true">
-        {tick}
-      </span>
-      {instanceCount > 1 && (
-        <div className="mb-3 p-3 bg-yellow-50 border border-yellow-300 rounded text-sm text-yellow-900">
-          Multiple extension instances detected ({instanceCount}). Disable
-          auto-scrape in all but one Chrome profile to avoid conflicts.
-        </div>
-      )}
-      <div className="flex justify-between items-start gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold mb-2">Auto-Scrape</h1>
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <span
-                className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                  isEnabled ? "bg-green-500" : "bg-gray-400"
-                }`}
-              />
-              {isEnabled ? "Running" : "Disabled"}
-              {isTestPending && " (test cycle pending)"}
-              {isExitRequested && " (shutting down…)"}
-            </div>
-            {heartbeatAgeSec !== null && (isEnabled || isTestPending) && (
-              <div className="flex items-center gap-2 text-gray-600">
-                <span
-                  className={`w-2.5 h-2.5 rounded-full shrink-0 ${heartbeatColor}`}
-                />
-                Heartbeat {formatAge(heartbeatAgeSec)} ago ({heartbeatLabel})
-              </div>
-            )}
-            {!state.last_sw_heartbeat_at && (isEnabled || isTestPending) && (
-              <div className="flex items-center gap-2 text-gray-500">
-                <span className="w-2.5 h-2.5 rounded-full shrink-0 bg-gray-400" />
-                {heartbeatLabel}
-              </div>
-            )}
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* FR-038: `enabled` is an OPERATOR DECISION (neutral/success);
+                the heartbeat is a MALFUNCTION signal (danger). Two independent
+                badges, two different tones -- they can never be confused. */}
+            <Badge tone={s.enabled ? 'success' : 'neutral'} dot>
+              {s.enabled ? 'Loop enabled' : 'Loop paused'}
+            </Badge>
+            <Badge tone={HEARTBEAT_TONE[grade]} dot>
+              {heartbeatLabel(grade)}
+            </Badge>
+            <Badge tone="neutral">Phase: {s.cycle_phase}</Badge>
+            <Badge tone="neutral">Cycle #{s.cycle_id}</Badge>
+            {s.exit_requested ? <Badge tone="warning">Stop-and-exit pending</Badge> : null}
+            {s.test_cycle_pending ? <Badge tone="info">Test cycle pending</Badge> : null}
+            {s.config_change_pending ? <Badge tone="info">Config change pending</Badge> : null}
           </div>
-          {typeof state.state.min_cycle_interval_ms === "number" &&
-            state.state.min_cycle_interval_ms > 0 && (
-              <p className="text-xs text-gray-500 mt-2">
-                Min cycle interval:{" "}
-                {Math.round(state.state.min_cycle_interval_ms / 1000)}s
-                (read-only)
-              </p>
-            )}
+
+          {/* enabled:true + unhealthy heartbeat is THE alarming combination:
+              it is supposed to be running and it is not. Say so explicitly. */}
+          {s.enabled && unhealthy ? (
+            <p className="max-w-2xl rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger-text">
+              The loop is enabled but the extension is not reporting in
+              {state.last_sw_heartbeat_at ? ` (last seen ${formatAge(state.last_sw_heartbeat_at)})` : ''}
+              . Unattended scraping is not running. This is not the same as a pause — nobody turned
+              it off.
+            </p>
+          ) : null}
+
+          {/* FR-039: concurrent instances corrupt cycle accounting. */}
+          {instances && instances.count > 1 ? (
+            <p className="max-w-2xl rounded-md border border-warning/30 bg-warning-subtle px-3 py-2 text-sm text-warning-text">
+              {instances.count} extension instances are reporting in. Concurrent instances corrupt
+              cycle accounting — close all but one.
+            </p>
+          ) : null}
+          {instancesError ? (
+            <p className="max-w-2xl text-xs text-text-muted">
+              Could not read extension instances — the multi-instance warning is unavailable.
+            </p>
+          ) : null}
+
+          <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+            <div className="flex gap-1.5">
+              <dt className="text-text-muted">Next cycle:</dt>
+              <dd className="text-text-secondary">{nextCycleLabel(s.next_cycle_at)}</dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt className="text-text-muted">Last heartbeat:</dt>
+              <dd className="text-text-secondary">{formatAge(state.last_sw_heartbeat_at)}</dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt className="text-text-muted">Precheck failures:</dt>
+              <dd className="text-text-secondary tabular-nums">{s.consecutive_precheck_failures}</dd>
+            </div>
+            <div className="flex gap-1.5">
+              <dt className="text-text-muted">Clean cycles:</dt>
+              <dd className="text-text-secondary tabular-nums">{s.clean_cycles_count}</dd>
+            </div>
+          </dl>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {!isEnabled && !isTestPending ? (
-            <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={wrap(() => enableAutoScrape())}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-              >
-                Enable
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={wrap(() => triggerTestCycle())}
-                className="px-4 py-2 bg-gray-100 border rounded hover:bg-gray-200 disabled:opacity-50"
-              >
-                Run Test Cycle
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={wrap(() => pauseAutoScrape())}
-                className="px-4 py-2 bg-gray-100 border rounded hover:bg-gray-200 disabled:opacity-50"
-              >
-                Pause
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={wrap(async () => {
-                  if (confirm("Stop and exit auto-scrape?")) {
-                    await shutdownAutoScrape();
-                  }
-                })}
-                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
-              >
-                Stop and Exit
-              </button>
-            </>
-          )}
+
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {s.enabled ? (
+              <Button variant="secondary" size="sm" busy={pause.isPending} disabled={busy} onClick={() => pause.mutate()}>
+                Pause loop
+              </Button>
+            ) : (
+              <Button variant="primary" size="sm" busy={enable.isPending} disabled={busy} onClick={() => enable.mutate()}>
+                Enable loop
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              busy={testCycle.isPending}
+              disabled={busy || s.test_cycle_pending}
+              onClick={() => testCycle.mutate()}
+            >
+              Run test cycle
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={busy || s.exit_requested}
+              onClick={() => setConfirmShutdown(true)}
+            >
+              Stop &amp; exit
+            </Button>
+          </div>
+
+          {/* FR-040: these are REQUESTS, not completed actions. */}
+          <p className="max-w-xs text-right text-xs text-text-muted">
+            Controls are requests — the extension acts on them on its next check-in, not
+            immediately.
+          </p>
+
+          {/* Mutation errors SURFACE. The old ConfigEditor had try/finally with
+              NO catch, so a failed action was completely invisible. */}
+          {[enable, pause, shutdown, testCycle]
+            .filter((m) => m.isError)
+            .map((m, i) => (
+              <p key={i} role="alert" className="max-w-xs text-right text-xs text-danger-text">
+                {m.error?.message}
+              </p>
+            ))}
         </div>
       </div>
-    </div>
-  );
+
+      <ConfirmDialog
+        open={confirmShutdown}
+        title="Request stop-and-exit?"
+        body="This asks the extension to finish what it is doing and shut the loop down. The extension acts on the request asynchronously — it will not stop the instant you confirm."
+        confirmLabel="Request stop & exit"
+        tone="destructive"
+        busy={shutdown.isPending}
+        onConfirm={() => shutdown.mutate(undefined, { onSettled: () => setConfirmShutdown(false) })}
+        onCancel={() => setConfirmShutdown(false)}
+      />
+    </Card>
+  )
 }

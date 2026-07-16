@@ -1,220 +1,266 @@
-"use client";
+import { useMemo, useState } from 'react'
 
-import { useEffect, useState } from "react";
+import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
+import { Card } from '@/components/ui/Card'
+import type { useAutoScrape } from '@/hooks/useAutoScrape'
 import type {
   AutoScrapeConfig,
-  ConfigLimits,
-  AutoScrapeState,
-} from "@/types/autoScrape";
-import { saveConfig, resetConfig } from "@/lib/api/autoScrape";
+  AutoScrapeConfigLimits,
+  AutoScrapeConfigUpdate,
+} from '@/types/autoScrape'
 
-export function ConfigEditor({
-  config,
-  limits,
-  state,
-  onSave,
-}: {
-  config: AutoScrapeConfig;
-  limits: ConfigLimits;
-  state: AutoScrapeState;
-  onSave: () => void;
-}) {
-  const [draft, setDraft] = useState(() => ({ ...config.config }));
-  const [busy, setBusy] = useState(false);
-  const [warnings, setWarnings] = useState<string[]>([]);
+/**
+ * FR-044: the orchestrator's own settings, VALIDATED AGAINST THE BACKEND'S
+ * PUBLISHED LIMITS (GET /config/limits) -- never hardcoded.
+ *
+ * The old ConfigEditor violated the stack boundary ("the React UI triggers and
+ * displays, it does not own business logic") three ways, all fixed here:
+ *   - hardcoded fallbacks `?? 10`, `?? 30`, `?? 12` that could silently drift
+ *     from the server's real limits
+ *   - a hardcoded site list at :112, while limits.derived_limits.valid_sites was
+ *     fetched and never used
+ *   - a magic `~{scansPerCycle * 4} min` estimate with no backend basis (dropped)
+ *
+ * And its worst bug: handleSave/handleReset were `try { ... } finally
+ * { setBusy(false) }` with NO CATCH -- a failed save was COMPLETELY INVISIBLE,
+ * surfacing only as an unhandled rejection. Errors surface here.
+ */
 
-  useEffect(() => {
-    setDraft({ ...config.config });
-  }, [config]);
+/** FR-045: hidden AND never sent. Omission preserves them via exclude_unset. */
+const DEAD_FIELDS = ['run_dedup_after_scrape', 'run_matching_after_dedup', 'run_apply_after_matching'] as const
 
-  const sites = (draft.enabled_sites as string[] | undefined) || [];
-  const keywords = (draft.keywords as string[] | undefined) || [];
-  const scansPerCycle = sites.length * keywords.length;
-  const maxKeywords = limits.derived_limits?.max_keywords ?? 10;
-  const maxScansHard =
-    limits.derived_limits?.max_scans_per_cycle_hard ?? 30;
-  const maxScansSoft =
-    limits.derived_limits?.max_scans_per_cycle_warn ?? 12;
+const NUMERIC_FIELDS = [
+  { key: 'min_cycle_interval_minutes', label: 'Min cycle interval (minutes)' },
+  { key: 'inter_scan_delay_seconds', label: 'Inter-scan delay (seconds)' },
+  { key: 'scan_timeout_minutes', label: 'Scan timeout (minutes)' },
+  { key: 'max_consecutive_precheck_failures', label: 'Max consecutive precheck failures' },
+  { key: 'max_consecutive_dead_session_cycles', label: 'Max consecutive dead-session cycles' },
+] as const
 
-  const exceedsHardCap = scansPerCycle > maxScansHard;
-  const exceedsKeywordMax = keywords.length > maxKeywords;
-  const exceedsSoftWarn =
-    scansPerCycle >= maxScansSoft && !exceedsHardCap;
+export interface ConfigEditorProps {
+  config: AutoScrapeConfig
+  limits: AutoScrapeConfigLimits
+  mutations: ReturnType<typeof useAutoScrape>['mutations']
+}
 
-  const toggleSite = (site: string) => {
-    const next = sites.includes(site)
-      ? sites.filter((x) => x !== site)
-      : [...sites, site];
-    setDraft({ ...draft, enabled_sites: next });
-  };
+/**
+ * NOTE: the draft is seeded from `config` ONCE, at mount. Re-seeding on change
+ * is handled by the PARENT keying this component on the server's `updated_at`,
+ * which remounts it after a save or reset.
+ *
+ * The obvious `useEffect(() => setDraft(config), [config])` is wrong twice over:
+ * it cascades an extra render, and it would silently clobber the operator's
+ * unsaved edits on any refetch. (Caught by react-hooks/set-state-in-effect --
+ * the rule the old config never ran.)
+ */
+export function ConfigEditor({ config, limits, mutations }: ConfigEditorProps) {
+  const [draft, setDraft] = useState<AutoScrapeConfig>(config)
+  const { saveConfig, resetConfig } = mutations
 
-  const updateKeyword = (idx: number, val: string) => {
-    const next = [...keywords];
-    next[idx] = val;
-    setDraft({ ...draft, keywords: next });
-  };
+  // From the server. NOT hardcoded -- note valid_sites is nested INSIDE
+  // derived_limits in the response, even though get_limits() returns it as a
+  // sibling. Bind to the response shape, not the function's.
+  const validSites = limits.derived_limits.valid_sites
+  const maxKeywords = limits.derived_limits.max_keywords
+  const warnAt = limits.derived_limits.max_scans_per_cycle_warn
+  const hardMax = limits.derived_limits.max_scans_per_cycle_hard
 
-  const addKeyword = () => {
-    if (keywords.length >= maxKeywords) return;
-    setDraft({ ...draft, keywords: [...keywords, ""] });
-  };
+  const scansPerCycle = draft.enabled_sites.length * draft.keywords.length
+  const isDirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(config), [draft, config])
 
-  const removeKeyword = (idx: number) => {
-    setDraft({
-      ...draft,
-      keywords: keywords.filter((_, i) => i !== idx),
-    });
-  };
+  const fieldErrors = saveConfig.isError ? (saveConfig.error.fieldErrors ?? {}) : {}
 
-  const handleSave = async () => {
-    if (exceedsHardCap || exceedsKeywordMax || busy) return;
-    setBusy(true);
-    setWarnings([]);
-    try {
-      const filtered = {
-        ...draft,
-        keywords: keywords.map((k) => k.trim()).filter((k) => k.length > 0),
-      };
-      const resp = await saveConfig(filtered);
-      if (resp.warnings?.length) setWarnings(resp.warnings);
-      onSave();
-    } finally {
-      setBusy(false);
+  const toggleSite = (site: string) =>
+    setDraft((d) => ({
+      ...d,
+      enabled_sites: d.enabled_sites.includes(site)
+        ? d.enabled_sites.filter((s) => s !== site)
+        : [...d.enabled_sites, site],
+    }))
+
+  const save = () => {
+    // FR-045: send ONLY the fields this form owns. The three dead pipeline
+    // toggles are never sent, which is exactly what preserves them.
+    const body: AutoScrapeConfigUpdate = {
+      enabled_sites: draft.enabled_sites,
+      // A shallow merge server-side replaces top-level keys wholesale and does
+      // NOT merge arrays element-wise -- so send the COMPLETE array.
+      keywords: draft.keywords,
+      min_cycle_interval_minutes: draft.min_cycle_interval_minutes,
+      inter_scan_delay_seconds: draft.inter_scan_delay_seconds,
+      scan_timeout_minutes: draft.scan_timeout_minutes,
+      max_consecutive_precheck_failures: draft.max_consecutive_precheck_failures,
+      max_consecutive_dead_session_cycles: draft.max_consecutive_dead_session_cycles,
     }
-  };
+    saveConfig.mutate(body)
+  }
 
-  const handleReset = async () => {
-    if (busy) return;
-    if (!confirm("Reset configuration to defaults?")) return;
-    setBusy(true);
-    try {
-      const fresh = await resetConfig();
-      setDraft({ ...fresh.config });
-      onSave();
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const phase = String(state.state.cycle_phase || "").toLowerCase();
-  const isRunning =
-    state.state.enabled === true ||
-    phase === "scrape_running" ||
-    phase === "postscrape_running";
+  const warnings = saveConfig.isSuccess
+    ? ((saveConfig.data as { warnings?: string[] } | undefined)?.warnings ?? [])
+    : []
 
   return (
-    <div className="bg-white border rounded-lg p-6 shadow-sm">
-      <h2 className="text-lg font-semibold mb-3">Configuration</h2>
+    <Card
+      title="Orchestrator settings"
+      actions={
+        <div className="flex items-center gap-2">
+          {isDirty ? <Badge tone="info">Unsaved changes</Badge> : null}
+          <Button variant="secondary" size="sm" busy={resetConfig.isPending} onClick={() => resetConfig.mutate()}>
+            Reset to defaults
+          </Button>
+          <Button variant="primary" size="sm" busy={saveConfig.isPending} disabled={!isDirty} onClick={save}>
+            Save
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        <div>
+          <p className="text-xs font-medium text-text-muted">Enabled sites</p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {/* From the server's valid_sites -- the old code fetched this and
+                then hardcoded the list anyway. */}
+            {validSites.map((site) => {
+              const on = draft.enabled_sites.includes(site)
+              return (
+                <button
+                  key={site}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => toggleSite(site)}
+                  className={[
+                    'rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors',
+                    on
+                      ? 'border-accent bg-accent text-text-inverse'
+                      : 'border-border bg-surface-card text-text-secondary hover:bg-surface-raised',
+                  ].join(' ')}
+                >
+                  {site}
+                </button>
+              )
+            })}
+          </div>
+          {fieldErrors.enabled_sites ? (
+            <p role="alert" className="mt-1 text-xs text-danger-text">
+              {fieldErrors.enabled_sites}
+            </p>
+          ) : null}
+        </div>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">Sites</div>
-        <div className="flex gap-3 flex-wrap">
-          {(["linkedin", "indeed", "glassdoor"] as const).map((site) => (
-            <label key={site} className="flex items-center gap-1.5 text-sm">
-              <input
-                type="checkbox"
-                checked={sites.includes(site)}
-                onChange={() => toggleSite(site)}
-              />
-              {site}
+        <div>
+          <div className="flex items-baseline justify-between">
+            <label htmlFor="keywords" className="text-xs font-medium text-text-muted">
+              Keywords (one per line)
             </label>
-          ))}
+            <span className="text-xs text-text-muted tabular-nums">
+              {draft.keywords.length} / {maxKeywords}
+            </span>
+          </div>
+          <textarea
+            id="keywords"
+            rows={4}
+            value={draft.keywords.join('\n')}
+            onChange={(e) =>
+              setDraft((d) => ({
+                ...d,
+                keywords: e.target.value.split('\n').map((k) => k.trimStart()),
+              }))
+            }
+            className="mt-1.5 w-full rounded-md border border-border bg-surface-card px-2 py-1.5 text-sm text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          />
+          {fieldErrors.keywords ? (
+            <p role="alert" className="mt-1 text-xs text-danger-text">
+              {fieldErrors.keywords}
+            </p>
+          ) : null}
         </div>
-      </div>
 
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">
-          Keywords ({keywords.length}/{maxKeywords})
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {NUMERIC_FIELDS.map(({ key, label }) => {
+            const range = limits.limits[key]
+            return (
+              <div key={key}>
+                <label htmlFor={key} className="text-xs font-medium text-text-muted">
+                  {label}
+                </label>
+                <input
+                  id={key}
+                  type="number"
+                  value={draft[key]}
+                  // min/max/placeholder all come from the SERVER's published limits.
+                  min={range?.min}
+                  max={range?.max}
+                  onChange={(e) => setDraft((d) => ({ ...d, [key]: Number(e.target.value) }))}
+                  className="mt-1 w-full rounded-md border border-border bg-surface-card px-2 py-1.5 text-sm tabular-nums text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                />
+                <p className="mt-0.5 text-[11px] text-text-muted">
+                  {range ? `${range.min}–${range.max} (recommended ${range.recommended})` : ' '}
+                </p>
+                {fieldErrors[key] ? (
+                  <p role="alert" className="text-xs text-danger-text">
+                    {fieldErrors[key]}
+                  </p>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
-        <div className="space-y-2">
-          {keywords.map((kw, idx) => (
-            <div key={idx} className="flex gap-2">
-              <input
-                type="text"
-                value={kw}
-                onChange={(e) => updateKeyword(idx, e.target.value)}
-                className="flex-1 border rounded px-2 py-1 text-sm"
-                placeholder="e.g. software engineer"
-              />
-              <button
-                type="button"
-                onClick={() => removeKeyword(idx)}
-                className="px-2 py-1 text-xs bg-gray-100 border rounded hover:bg-gray-200"
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            onClick={addKeyword}
-            disabled={keywords.length >= maxKeywords}
-            className="px-3 py-1 text-sm bg-gray-100 border rounded hover:bg-gray-200 disabled:opacity-50"
-          >
-            + Add keyword
-          </button>
+
+        {/* `scans_per_cycle` is a SYNTHETIC field key, not a config field:
+            > hardMax -> a 422 field_error; >= warnAt -> a warning on a 200. */}
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2">
+          <span className="text-xs text-text-secondary">
+            {draft.keywords.length} keywords × {draft.enabled_sites.length} sites ={' '}
+            <span className="font-medium tabular-nums text-text-primary">{scansPerCycle}</span>{' '}
+            scans/cycle
+          </span>
+          {scansPerCycle > hardMax ? (
+            <Badge tone="danger">over the {hardMax} maximum</Badge>
+          ) : scansPerCycle >= warnAt ? (
+            <Badge tone="warning">at or above the {warnAt} warning threshold</Badge>
+          ) : null}
+          {fieldErrors.scans_per_cycle ? (
+            <p role="alert" className="text-xs text-danger-text">
+              {fieldErrors.scans_per_cycle}
+            </p>
+          ) : null}
         </div>
-      </div>
 
-      <div className="text-sm mb-4 p-3 bg-gray-50 rounded">
-        {keywords.length} keyword(s) × {sites.length} site(s) ={" "}
-        <strong>{scansPerCycle} scans/cycle</strong>
-        {scansPerCycle > 0 && (
-          <span className="text-gray-500">
-            {" "}
-            (estimated ~{scansPerCycle * 4} min)
-          </span>
-        )}
-        {exceedsSoftWarn && (
-          <span className="text-yellow-700 ml-2">
-            Long cycle. Consider reducing.
-          </span>
-        )}
-        {exceedsHardCap && (
-          <span className="text-red-600 ml-2">
-            Exceeds hard cap of {maxScansHard}.
-          </span>
-        )}
-        {exceedsKeywordMax && (
-          <span className="text-red-600 ml-2">
-            Too many keywords (max {maxKeywords}).
-          </span>
-        )}
-      </div>
-
-      {warnings.length > 0 && (
-        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm">
-          <ul className="list-disc list-inside">
-            {warnings.map((w, i) => (
-              <li key={i}>{w}</li>
+        {/* FR-044: warnings arrive on a 200 and must be rendered on SUCCESS,
+            not only on failure. */}
+        {warnings.length > 0 ? (
+          <div className="rounded-md border border-warning/30 bg-warning-subtle px-3 py-2">
+            {warnings.map((w) => (
+              <p key={w} className="text-xs text-warning-text">
+                {w}
+              </p>
             ))}
-          </ul>
-        </div>
-      )}
+          </div>
+        ) : null}
 
-      <div className="flex flex-wrap gap-2 items-center">
-        <button
-          type="button"
-          disabled={busy || exceedsHardCap || exceedsKeywordMax}
-          onClick={handleSave}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={handleReset}
-          className="px-4 py-2 bg-gray-100 border rounded hover:bg-gray-200 disabled:opacity-50"
-        >
-          Reset to Defaults
-        </button>
-        {isRunning && (
-          <span className="text-xs text-gray-500">
-            Configuration changes take effect at the next cycle.
-          </span>
-        )}
+        {saveConfig.isSuccess && warnings.length === 0 && !isDirty ? (
+          <p className="text-xs text-success-text">Settings saved.</p>
+        ) : null}
+
+        {/* THE FIX. The old handleSave had try/finally with no catch, so this
+            never appeared and a failed save looked identical to a successful one. */}
+        {saveConfig.isError ? (
+          <p role="alert" className="rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger-text">
+            Could not save: {saveConfig.error.message}
+          </p>
+        ) : null}
+        {resetConfig.isError ? (
+          <p role="alert" className="rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-xs text-danger-text">
+            Could not reset: {resetConfig.error.message}
+          </p>
+        ) : null}
+
+        <p className="text-[11px] text-text-muted">
+          {DEAD_FIELDS.length} retained post-scrape pipeline settings are not shown — they no longer
+          drive any behaviour. Their stored values are preserved across saves.
+        </p>
       </div>
-    </div>
-  );
+    </Card>
+  )
 }

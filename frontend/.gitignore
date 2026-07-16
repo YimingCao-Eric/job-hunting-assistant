@@ -1,24 +1,17 @@
-# Logs
-logs
+node_modules/
+dist/
+build/
+coverage/
+
+# Local env -- .env.example is committed, .env is not (it carries the token).
+.env
+.env.*
+!.env.example
+
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+*.tmp
+*.swp
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+Thumbs.db
+.vscode/
+.idea/

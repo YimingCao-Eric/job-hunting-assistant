@@ -222,9 +222,9 @@ Frontend-only feature. All paths are under `web/` (which becomes `frontend/` at 
 
 ### Cutover (run last — it removes the old app as a reference)
 
-- [ ] T091 **CUTOVER**: `git rm -r frontend && git mv web frontend` in one commit (research R10). **Only proceed once T090 is green.** Update the port in `frontend/vite.config.ts` from 5174 back to **5173** to match the compose-published port
-- [ ] T092 Confirm `git diff --stat -- docker-compose.yml` is **empty** — landing at `frontend/` means the bind-mounts (`./frontend/src`, `./frontend/index.html`) and `VITE_API_URL`/`VITE_AUTH_TOKEN` need no edit. Then `docker compose up -d --build frontend` and re-run quickstart.md S1 against `http://localhost:5173`. Depends on T091
-- [ ] T093 Confirm the blast radius: `git diff --stat` against the merge base shows **zero backend files, zero migrations, zero smoke tests** touched (plan.md Complexity Tracking). Then run the smoke suite unmodified — `docker compose exec backend python -m pytest smoke_test_auto_expiration.py smoke_test_auto_scrape.py smoke_test_matched_claim.py` — and confirm it passes (Constitution Principle II). **Run inside the container**; the host `python` is broken. Depends on T092
+- [X] T091 **CUTOVER**: `git rm -r frontend && git mv web frontend` in one commit (research R10). **Only proceed once T090 is green.** Update the port in `frontend/vite.config.ts` from 5174 back to **5173** to match the compose-published port
+- [X] T092 Confirm `git diff --stat -- docker-compose.yml` is **empty** — landing at `frontend/` means the bind-mounts (`./frontend/src`, `./frontend/index.html`) and `VITE_API_URL`/`VITE_AUTH_TOKEN` need no edit. Then `docker compose up -d --build frontend` and re-run quickstart.md S1 against `http://localhost:5173`. Depends on T091
+- [X] T093 Confirm the blast radius: `git diff --stat` against the merge base shows **zero backend files, zero migrations, zero smoke tests** touched (plan.md Complexity Tracking). Then run the smoke suite unmodified — `docker compose exec backend python -m pytest smoke_test_auto_expiration.py smoke_test_auto_scrape.py smoke_test_matched_claim.py` — and confirm it passes (Constitution Principle II). **Run inside the container**; the host `python` is broken. Depends on T092
 
 ---
 

@@ -10,11 +10,11 @@ export default defineConfig({
   },
   server: {
     host: true,
-    // 5174, not 5173: the OLD app still occupies 5173 via docker-compose while
-    // this one is built (research R10). T091 flips this back to 5173 at cutover.
-    // No backend change is needed for either port -- CORS admits any
-    // http://localhost:<port> via allow_origin_regex (backend/main.py:97-108).
-    port: 5174,
+    // 5173: the port docker-compose publishes. During the build this app lived
+    // at web/ on 5174 to coexist with the old frontend; the cutover (T091)
+    // returned it here. No backend change was ever needed for either port --
+    // CORS admits any http://localhost:<port> (backend/main.py:97-108).
+    port: 5173,
     watch: { usePolling: true },
   },
   // T009: pure-logic tests only (research R18) -- no jsdom, no component tests.

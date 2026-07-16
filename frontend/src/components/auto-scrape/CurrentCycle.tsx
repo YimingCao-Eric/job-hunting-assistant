@@ -1,54 +1,76 @@
-import type { AutoScrapeState, AutoScrapeCycle } from "@/types/autoScrape";
+import { Badge } from '@/components/ui/Badge'
+import { Card } from '@/components/ui/Card'
+import { EmptyState } from '@/components/ui/states/EmptyState'
+import { formatElapsed } from '@/lib/format/datetime'
+import { CYCLE_TONE } from '@/lib/tokens/semantics'
+import type { AutoScrapeState, Cycle } from '@/types/autoScrape'
 
-export function CurrentCycle({
-  state,
-  cycles,
-}: {
-  state: AutoScrapeState;
-  cycles: AutoScrapeCycle[];
-}) {
-  const running = cycles.find(
-    (c) =>
-      c.status === "scrape_running" || c.status === "postscrape_running"
-  );
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <p className="text-xs text-text-muted">{label}</p>
+      <p className="text-lg font-semibold tabular-nums text-text-primary">{value}</p>
+    </div>
+  )
+}
 
-  if (!running) {
+export interface CurrentCycleProps {
+  state: AutoScrapeState
+  cycles: Cycle[]
+}
+
+/** The in-flight cycle, with an explicit "no active cycle" empty state --
+ *  a per-component empty state is part of what makes the old decomposition
+ *  the quality bar. */
+export function CurrentCycle({ state, cycles }: CurrentCycleProps) {
+  const active = cycles.find((c) => c.cycle_id === state.cycle_id && c.completed_at === null)
+  const results = state.cycle_results
+
+  if (!active) {
     return (
-      <div className="bg-white border rounded-lg p-6 shadow-sm text-gray-500">
-        No active cycle.
-      </div>
-    );
+      <Card title="Current cycle">
+        <EmptyState
+          kind="no-data"
+          title="No active cycle."
+          body={
+            state.enabled
+              ? 'The loop is enabled and waiting for its next scheduled cycle.'
+              : 'The loop is paused, so no cycle is scheduled.'
+          }
+        />
+      </Card>
+    )
   }
 
-  const totalScans = running.scans_attempted || 0;
-  const pos = state.state.matrix_position;
-
   return (
-    <div className="bg-white border rounded-lg p-6 shadow-sm">
-      <h2 className="text-lg font-semibold mb-3">
-        Current cycle #{running.cycle_id}
-      </h2>
-      <div className="grid grid-cols-2 gap-y-2 text-sm">
-        <div className="text-gray-500">Phase</div>
-        <div>{running.status}</div>
-        <div className="text-gray-500">Scans</div>
+    <Card
+      title={`Current cycle #${active.cycle_id}`}
+      actions={<Badge tone={CYCLE_TONE[active.status] ?? 'neutral'} dot>{active.status}</Badge>}
+    >
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <Stat label="Attempted" value={results.scans_attempted} />
+        <Stat label="Succeeded" value={results.scans_succeeded} />
+        <Stat label="Failed" value={results.scans_failed} />
         <div>
-          {running.scans_succeeded}/{totalScans} succeeded
+          <p className="text-xs text-text-muted">Elapsed</p>
+          <p className="text-lg font-semibold tabular-nums text-text-primary">
+            {formatElapsed(active.started_at, null)}
+          </p>
         </div>
-        {pos &&
-          typeof pos.site_index === "number" &&
-          typeof pos.keyword_index === "number" && (
-            <>
-              <div className="text-gray-500">Matrix</div>
-              <div>
-                site {pos.site_index + 1}, keyword {pos.keyword_index + 1}{" "}
-                (from state)
-              </div>
-            </>
-          )}
-        <div className="text-gray-500">Started</div>
-        <div>{new Date(running.started_at).toLocaleTimeString()}</div>
       </div>
-    </div>
-  );
+
+      {Object.keys(results.failures_by_reason).length > 0 ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium text-text-muted">Failures by reason</p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {Object.entries(results.failures_by_reason).map(([reason, count]) => (
+              <Badge key={reason} tone="danger">
+                {reason}: {count}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  )
 }
