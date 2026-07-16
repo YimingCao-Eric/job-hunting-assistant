@@ -1,10 +1,12 @@
 # Feature Specification: Search-Only Frontend Redesign
 
-**Feature Branch**: `031-frontend-redesign`
+**Feature Branch**: `007-frontend-redesign`
 
 **Created**: 2026-07-15
 
-**Status**: Draft
+**Updated**: 2026-07-15 — scope corrected: the per-source read capability (FR-048–FR-052) shipped in feature 008; this is now a frontend-only feature.
+
+**Status**: Planned
 
 **Input**: User description: "Design a new, clean, consistent frontend for the search-only JHA with exactly four pages: Config (/), Jobs (/jobs), Logs (/logs), and Auto-Scrape (/dashboard/auto-scrape). The old frontend is being replaced because it is inconsistent (mixed JS/TS, ad-hoc styling). Describe each page's purpose, information architecture, key user flows, and states (loading/empty/error), and the shared navigation. Config edits search settings; Jobs lists scraped jobs with filters and a scan trigger plus live run progress; Logs shows search run-logs with expandable debug traces; Auto-Scrape is the orchestrator console (enable/pause/stop, cycles, session health). No dedup, matching, skills, or profile UI. Focus on behavior, IA, and UX — not the tech stack."
 
@@ -14,17 +16,19 @@ The backend was reduced to **search-only**: dedup, matching, skills, and profile
 
 This feature replaces the frontend with **exactly four pages** that mirror the search-only backend, presented through one shared shell, one visual system, and one set of interaction conventions.
 
-It also closes one backend gap that blocks the redesign: real scrape output is written to per-source storage that has no read capability, so the Jobs page — the product's primary surface — has no source of real data without it. That gap predates this feature and would defeat any frontend built on top of it.
+When this spec was drafted, one backend gap blocked the redesign: real scrape output was written to per-source storage with no read capability, so the Jobs page — the product's primary surface — had no source of real data. **That gap is now closed.** Feature 008 shipped the capability: `GET /jobs` returns canonical merged rows (`source_site`, `title`, `company`, `location_text`, `description`, `posted_at`, `remote`, `salary_min`/`salary_max`/`salary_currency`/`salary_period`, `dismissed`) in a paginated `{items, total, limit, offset}` envelope, with `GET /jobs/{id}` for a single job's detail. FR-048–FR-052 record what was required and are **delivered**; they are no longer this feature's work.
 
-**In scope**: the four pages, the shared shell, and a backend read capability for per-source scrape data.
+**This is therefore a frontend-only feature.** No backend change, no migration, and no smoke-test change is in scope.
 
-**Out of scope**: any dedup, matching, skills, or profile surface; all other backend change; authentication redesign.
+**In scope**: the four pages and the shared shell.
+
+**Out of scope**: any dedup, matching, skills, or profile surface; the per-source read capability (**delivered by feature 008** — see FR-048–FR-052); all backend change; authentication redesign.
 
 ## Clarifications
 
 ### Session 2026-07-15
 
-- Q: Jobs data source — does this feature add a backend read capability for per-source scrape data, or does Jobs display only what the current job-listing capability returns? → A: Add the backend read capability; scope expands beyond the frontend.
+- Q: Jobs data source — does this feature add a backend read capability for per-source scrape data, or does Jobs display only what the current job-listing capability returns? → A: Add the backend read capability; scope expands beyond the frontend. — **Superseded 2026-07-15**: feature 008 shipped that capability independently, so the expanded scope reverted. This feature is frontend-only and Jobs reads the canonical `GET /jobs`. The answer stands as the record of the decision; its consequence no longer applies.
 - Q: Orchestrator settings placement — do orchestrator settings stay on Auto-Scrape, or move to Config alongside search settings? → A: Stay on Auto-Scrape.
 - Q: Navigation layout — horizontal top nav, left sidebar, or top nav plus a persistent global status strip? → A: Horizontal top nav.
 
@@ -198,13 +202,15 @@ The operator opens Logs to answer "what happened on that run?". They scan a list
 - **FR-029**: Jobs MUST refresh the list when a run reaches a terminal state.
 - **FR-030**: Jobs MUST NOT poll any backend endpoint whose read consumes a pending command intended for the scraper.
 
-**Per-source scrape read capability** (added scope — Clarification Q1)
+**Per-source scrape read capability** — ✅ **DELIVERED BY FEATURE 008. Out of this feature's scope.**
 
-- **FR-048**: The system MUST expose a read capability over the per-source scrape record for all three supported sites, since that is where scraping actually writes and no read path exists today.
-- **FR-049**: That capability MUST present a single common projection across the three sites — at minimum title, company, location, description, original posting URL, posting date, scraped date, and source site — so that Jobs renders one uniform list rather than three site-shaped variants. Site-specific fields beyond the common projection are out of scope for this feature.
-- **FR-050**: That capability MUST support everything FR-022–FR-024 require of it: ordering newest-scraped-first, filtering by source site and scraped-date range, per-site counts, pagination, and retrieval of a single job's full detail.
-- **FR-051**: A job whose source record is missing a projected field MUST be returned with that field explicitly absent rather than omitted from results, so FR-013's "no data matches" and a partially-populated row stay distinguishable.
-- **FR-052**: The read capability MUST NOT mutate scrape records. The per-source tables are append-only by constitutional invariant, with only claim-and-flag and shelf-life expiry permitted to write them.
+Originally added as scope by Clarification Q1, when no read path existed. Feature 008 built it via the canonical `scraped_jobs` table, populated by atomic dual-write at ingest. The requirements below are **retained as the record of what was required and satisfied** — they are not work items for this feature, and no task implements them. Each is discharged against live code (`backend/routers/jobs.py`, `backend/schemas/scraped_job.py`), not against documentation.
+
+- **FR-048** ✅: The system MUST expose a read capability over the per-source scrape record for all three supported sites. — **Delivered**: `GET /jobs` over canonical `scraped_jobs` (`backend/routers/jobs.py:850`).
+- **FR-049** ✅: That capability MUST present a single common projection across the three sites — at minimum title, company, location, description, original posting URL, posting date, scraped date, and source site — so that Jobs renders one uniform list rather than three site-shaped variants. — **Delivered**: `ScrapedJobRead` (`backend/schemas/scraped_job.py:43-95`), which also carries `remote`, salary fields, `apply_url`, `experience_level`, and `industry`.
+- **FR-050** ✅: That capability MUST support everything FR-022–FR-024 require of it: ordering newest-scraped-first, filtering by source site and scraped-date range, per-site counts, pagination, and retrieval of a single job's full detail. — **Delivered, with one gap absorbed by the frontend**: `scrape_time DESC`; `source_site` + `scraped_from`/`scraped_to`; `limit`/`offset` + `total`; `GET /jobs/{id}`. **There is no per-site count endpoint** — no facet, no aggregate — so Jobs derives counts client-side from three `?source_site=X&limit=1` reads of `total`. See plan.md research R3.
+- **FR-051** ✅: A job whose source record is missing a projected field MUST be returned with that field explicitly absent rather than omitted from results, so FR-013's "no data matches" and a partially-populated row stay distinguishable. — **Delivered**: nullable columns serialize as explicit `null`, never dropped. Note two real traits the frontend must absorb: `remote` is **tri-state** (`null` means the site did not say — not "on-site"), and `company` may be `""` as well as `null`.
+- **FR-052** ✅: The read capability MUST NOT mutate scrape records. The per-source tables are append-only by constitutional invariant, with only claim-and-flag and shelf-life expiry permitted to write them. — **Delivered**: the `GET` handlers are read-only. This frontend additionally never calls `PUT /jobs/{id}` (the only job write, `dismissed`), so Constitution Principle V is satisfied vacuously.
 
 **Logs page**
 
@@ -272,7 +278,7 @@ The operator opens Logs to answer "what happened on that run?". They scan a list
 
 **Backend dependencies observed as-built (constraints the design must absorb, not fix)**
 
-These describe real current behavior, warts included, per constitutional Principle I. Exactly one as-built gap is fixed rather than absorbed — the missing per-source read path (FR-048–FR-052, Clarification Q1); everything below stands as-is and the design must live with it.
+These describe real current behavior, warts included, per constitutional Principle I. **Every one of them is absorbed, not fixed** — this feature changes no backend code, so the design must live with all of them. (The one gap that was originally to be fixed here, the missing per-source read path, was closed by feature 008 instead; see FR-048–FR-052.)
 
 - **Scan triggering is a mailbox, not a request/response.** The trigger returns no run identifier and returns before any scan starts; the extension picks the command up on its own polling schedule. Correlating a trigger to its run therefore depends on recency, and a bounded wait (FR-027) is required because a trigger may never be collected at all.
 - **Pending-command reads are destructive.** The endpoints exposing queued scraper commands clear the flag when read. The frontend must never poll them or it will steal the extension's instructions (FR-030).
@@ -287,8 +293,8 @@ These describe real current behavior, warts included, per constitutional Princip
 
 ## Dependencies
 
-- **Backend, search-only surface** — the four pages depend on the existing configuration, jobs, extension/run-log, and auto-scrape capabilities.
-- **Backend, per-source read capability** — User Story 1 cannot deliver its stated value until FR-048–FR-052 exist. This is the one backend change this feature introduces (Clarification Q1); Jobs is otherwise blocked, not merely degraded.
+- **Backend, search-only surface** — the four pages depend on the existing configuration, jobs, extension/run-log, and auto-scrape capabilities. All four exist today; this feature adds no backend capability.
+- **Feature 008, unified `scraped_jobs`** — ✅ **satisfied.** User Story 1 depends on the canonical read capability (FR-048–FR-052), which feature 008 shipped. **US1 is unblocked**; Jobs has a real data source. This dependency is discharged, not outstanding.
 - **Chrome extension** — Jobs progress and all auto-scrape activity depend on the extension running. When it is absent, pages must degrade to a stated state (FR-027, FR-038) rather than appear broken.
-- **Constitution, Principle II** — the existing smoke-test suite defines backend behavior. Where this spec and a smoke test disagree about backend behavior, the smoke test wins. The new read capability is intended to be permanent and so should acquire smoke-test coverage of its own.
-- **Constitution, Principle V** — the per-source tables are append-only, with only claim-and-flag and shelf-life expiry permitted to mutate them. FR-052 keeps the new capability inside that invariant.
+- **Constitution, Principle II** — the existing smoke-test suite defines backend behavior. Where this spec and a smoke test disagree about backend behavior, the smoke test wins. This feature changes no backend behavior, so it changes no smoke test: `smoke_test_auto_expiration.py`, `smoke_test_auto_scrape.py`, and `smoke_test_matched_claim.py` must still pass **unmodified**. The read capability's own smoke coverage was feature 008's obligation and is discharged there.
+- **Constitution, Principle V** — the per-source tables are append-only, with only claim-and-flag and shelf-life expiry permitted to mutate them; the derived `scraped_jobs` row permits only the claim-flip, a user-set `dismissed` flag, and expiry `DELETE`. This frontend is **read-only over both** and never writes a job row, so the invariant is untouched.

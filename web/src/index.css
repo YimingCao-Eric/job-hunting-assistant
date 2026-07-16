@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The single token set (FR-007). Values live here as RGB triplets so Tailwind
+   can apply alpha (`bg-danger/10`); tailwind.config.ts maps them to utilities.
+   Nothing outside this file and components/ui/ may declare a color (SC-006). */
+@layer base {
+  :root {
+    /* surface */
+    --surface-page: 248 250 252;
+    --surface-card: 255 255 255;
+    --surface-raised: 241 245 249;
+    --surface-overlay: 15 23 42;
+
+    /* border */
+    --border-default: 226 232 240;
+    --border-strong: 203 213 225;
+
+    /* text */
+    --text-primary: 15 23 42;
+    --text-secondary: 71 85 105;
+    --text-muted: 148 163 184;
+    --text-inverse: 255 255 255;
+
+    /* accent */
+    --accent-default: 37 99 235;
+    --accent-hover: 29 78 216;
+    --accent-subtle: 239 246 255;
+
+    /* semantic: success */
+    --success-default: 22 163 74;
+    --success-hover: 21 128 61;
+    --success-subtle: 240 253 244;
+    --success-text: 22 101 52;
+
+    /* semantic: warning */
+    --warning-default: 217 119 6;
+    --warning-hover: 180 83 9;
+    --warning-subtle: 255 251 235;
+    --warning-text: 146 64 14;
+
+    /* semantic: danger */
+    --danger-default: 220 38 38;
+    --danger-hover: 185 28 28;
+    --danger-subtle: 254 242 242;
+    --danger-text: 153 27 27;
+
+    /* semantic: info */
+    --info-default: 2 132 199;
+    --info-hover: 3 105 161;
+    --info-subtle: 240 249 255;
+    --info-text: 7 89 133;
+
+    /* radius */
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+
+    /* shadow */
+    --shadow-card: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+    --shadow-overlay: 0 10px 25px -5px rgb(15 23 42 / 0.2);
+  }
+
+  html {
+    font-family: theme('fontFamily.sans');
+  }
+
+  body {
+    @apply bg-surface-page text-text-primary antialiased;
+  }
+}
+
+/**
+ * Job-description prose.
+ *
+ * The one place raw element selectors are legitimate: this styles SANITIZED
+ * third-party HTML (see lib/format/description.ts), which arrives without our
+ * classes and cannot be given any. `preflight` resets ul/h3/etc to nothing, so
+ * without this the restored formatting would be invisible.
+ *
+ * Scoped to `.prose-jd` so it can never leak into the app's own markup, and
+ * built only from tokens (SC-006).
+ */
+@layer components {
+  .prose-jd {
+    @apply break-words;
+  }
+  .prose-jd > :first-child {
+    @apply mt-0;
+  }
+  .prose-jd p,
+  .prose-jd div {
+    @apply my-2;
+  }
+  .prose-jd h1,
+  .prose-jd h2,
+  .prose-jd h3,
+  .prose-jd h4,
+  .prose-jd h5,
+  .prose-jd h6 {
+    @apply mb-1 mt-4 font-semibold text-text-primary;
+  }
+  .prose-jd h1 { @apply text-base; }
+  .prose-jd h2 { @apply text-sm; }
+  .prose-jd h3,
+  .prose-jd h4,
+  .prose-jd h5,
+  .prose-jd h6 { @apply text-sm; }
+  .prose-jd ul {
+    @apply my-2 list-disc space-y-1 pl-5;
+  }
+  .prose-jd ol {
+    @apply my-2 list-decimal space-y-1 pl-5;
+  }
+  .prose-jd li {
+    @apply pl-1;
+  }
+  .prose-jd strong,
+  .prose-jd b {
+    @apply font-semibold text-text-primary;
+  }
+  .prose-jd em,
+  .prose-jd i {
+    @apply italic;
+  }
+  .prose-jd a {
+    @apply text-accent underline underline-offset-2 hover:text-accent-hover;
+  }
+  .prose-jd blockquote {
+    @apply my-2 border-l-2 border-border-strong pl-3 text-text-secondary;
+  }
+  .prose-jd code {
+    @apply rounded-sm bg-surface-raised px-1 py-0.5 text-xs;
+  }
+  .prose-jd pre {
+    @apply my-2 overflow-x-auto rounded-md bg-surface-raised p-2 text-xs;
+  }
+  .prose-jd hr {
+    @apply my-3 border-border;
+  }
+  /* FR-006 / SC-012: a wide table in a scraped description must scroll its own
+     container, never widen the page. */
+  .prose-jd table {
+    @apply my-2 block w-full overflow-x-auto text-xs;
+  }
+  .prose-jd th,
+  .prose-jd td {
+    @apply border border-border px-2 py-1 text-left align-top;
+  }
+  .prose-jd th {
+    @apply bg-surface-raised font-semibold;
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* The gate. NOTE: `allowJs` and `checkJs` are deliberately ABSENT.
+       src/ is 100% TypeScript, so no source file can opt out of checking.
+       The old frontend set strict+noEmit yet checked ~700 of 12,235 lines,
+       because its source was .jsx and allowJs was off. Do not add them. */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] }
+  },
+  "include": ["src"]
+
+  /* NO `references` to tsconfig.node.json, deliberately. Project references
+     require the referenced project to set `composite: true`  (TS6306), and
+     `composite` forbids `noEmit`  (TS6310) -- a referenced project must be able
+     to emit declarations. This is a GATE, not a build: nothing may emit.
+     The two are therefore incompatible.
+
+     T004's actual goal -- that vite.config.ts / eslint.config.js are typechecked
+     at all, which the old single-tsconfig setup never did -- is met by the
+     `typecheck` script running BOTH projects explicitly:
+        tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json
+     `references` was a means to that end, and this is the means that works. */
+}

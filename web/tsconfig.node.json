@@ -1,0 +1,21 @@
+{
+  /* Covers the build config itself. The old single-tsconfig setup left
+     vite.config / eslint.config entirely unchecked. `npm run typecheck`
+     runs this project explicitly as well as tsconfig.json. */
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts", "tailwind.config.ts", "eslint.config.js", "postcss.config.js"]
+}
