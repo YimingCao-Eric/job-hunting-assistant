@@ -69,6 +69,18 @@ def linkedin_payload(run_id: str, tag: str) -> dict:
                 "formattedLocation": "Toronto, ON, Canada",
                 "listedAt": 1751328000000,
                 "workRemoteAllowed": True,
+                # 031 filter attributes. This is LinkedIn's REAL workplace shape, taken
+                # from the 2026-07-17 scan (467 rows): a URN-keyed map whose VALUES are
+                # the same URN strings, with no localizedName anywhere. 2 = remote.
+                #
+                # The original 031 fixture guessed a localizedName resolution map and was
+                # wrong -- the warning review caught it. The fixture now carries what
+                # LinkedIn actually sends, so the happy path exercises the real code path
+                # rather than an invented one.
+                "workplaceTypesResolutionResults": {
+                    "*urn:li:fs_workplaceType:2": "urn:li:fs_workplaceType:2"
+                },
+                "formattedEmploymentStatus": "Full-time",
                 "formattedExperienceLevel": "Mid-Senior level",
                 "formattedIndustries": ["Software Development"],
                 "description": {"text": "Build and operate distributed services."},
@@ -84,7 +96,9 @@ def linkedin_payload(run_id: str, tag: str) -> dict:
                             "currencyCode": "CAD",
                             "payPeriod": "YEARLY",
                         }
-                    ]
+                    ],
+                    # 031: LinkedIn's boolean admits no unrecognized state.
+                    "providedByEmployer": True,
                 },
                 "companyDetails": {"company": "urn:li:fs_normalized_company:999001"},
             },
@@ -112,11 +126,19 @@ def indeed_payload(run_id: str, tag: str) -> dict:
                 "pubDate": 1751414400000,
                 "remoteLocation": False,
                 "extractedSalary": {"min": 55, "max": 75, "type": "HOURLY"},
+                # source "EXTRACTION" is preserved from the 008 fixture deliberately --
+                # it is a shape Indeed genuinely sends, and it maps to NEITHER employer
+                # nor estimate. Changing it to "EMPLOYER" would make salary_disclosed
+                # look better here while hiding a real gap. See CASES below.
                 "salarySnippet": {"currency": "CAD", "source": "EXTRACTION"},
+                # 031: Indeed states employment type as a list.
+                "jobTypes": ["Full-time"],
             },
             "graphql": {
                 "description": {"text": "Own the data platform end to end."},
                 "employer": {"name": "GraphQL Fallback Employer"},
+                # 031: Indeed is the only site that supplies a language.
+                "language": "en",
             },
         },
     }
@@ -133,12 +155,40 @@ def glassdoor_payload(run_id: str, tag: str) -> dict:
                     "locationName": "Montreal, QC",
                     "employerName": "Glass Corp",
                     "payPeriod": "ANNUAL",
+                    # 031. NOTE the payload split this fixture makes visible: salarySource
+                    # lives here in jobDetailsData, while the salary AMOUNTS this row
+                    # stores come from json_ld.baseSalary below. Two different payloads
+                    # describing potentially different figures -- salary_disclosed
+                    # inherits that split from 030's salary_period (also read from here).
+                    "salarySource": "EMPLOYER_PROVIDED",
                 },
                 "jobDetailsRawData": {
                     "jobview": {
                         "header": {
                             "applyUrl": f"https://example.com/apply/{tag}",
+                            # NOTE: live Glassdoor does NOT send this -- the scraper
+                            # returns remoteWorkTypes empty, so every real Glassdoor row
+                            # has workplace_type = NULL (spec FR-005f / SC-002a). This
+                            # fixture populates it deliberately, to exercise the
+                            # projection ahead of that scraper gap: the mapping is
+                            # correct and will work unchanged the moment the extension
+                            # supplies the field.
+                            #
+                            # So a green assertion here does NOT mean Glassdoor workplace
+                            # filtering works in production. It means the projection is
+                            # ready for when it can. Do not read this test as coverage of
+                            # live behaviour -- and do not "fix" the gap here; it is
+                            # scraper-layer work.
                             "remoteWorkTypes": ["REMOTE"],
+                            # 031: header jobType is the FALLBACK for employment_type.
+                            # json_ld employmentType (below) is present, so it wins
+                            # outright and this value must be ignored entirely -- never
+                            # merged. If FULL_TIME ever shows up in employment_type for
+                            # this fixture, the precedence broke.
+                            "jobType": ["Full-time"],
+                            "indeedJobAttribute": {
+                                "educationLabel": ["Bachelor's degree", "Master's degree"],
+                            },
                         }
                     }
                 },
@@ -151,6 +201,10 @@ def glassdoor_payload(run_id: str, tag: str) -> dict:
                 "salaryCurrency": "CAD",
                 "baseSalary": {"value": {"minValue": 120000, "maxValue": 160000}},
                 "experienceRequirements": {"description": "5+ years backend"},
+                # 031: the structured employment type. Present, so it beats the header's
+                # jobType outright (PART_TIME here vs Full-time there, deliberately
+                # different so "structured wins" is actually proven rather than assumed).
+                "employmentType": ["PART_TIME"],
             },
         },
     }
@@ -184,6 +238,16 @@ CASES = {
             # "YEARLY" -> canonical ANNUAL
             "salary_period": "ANNUAL",
             "posted_at": LI_POSTED_AT,
+            # --- 031 filter attributes ---
+            # "Full-time" -> FULL_TIME
+            "employment_type": "FULL_TIME",
+            # Read out of the URN enum (workplaceType:2 = remote), not a label list.
+            # Agrees with workRemoteAllowed here, so no conflict warning fires.
+            "workplace_type": "REMOTE",
+            # LinkedIn supplies neither.
+            "language": None,
+            "education_requirements": None,
+            "salary_disclosed": True,
         },
     ),
     "indeed": (
@@ -204,6 +268,31 @@ CASES = {
             "remote": False,
             "salary_period": "HOURLY",
             "posted_at": IN_POSTED_AT,
+            # --- 031 filter attributes ---
+            # jobTypes ["Full-time"] -> FULL_TIME (same token LinkedIn yields)
+            "employment_type": "FULL_TIME",
+            # remoteLocation=False -> ONSITE. Accepted mislabel: Indeed cannot express
+            # hybrid, so this asserts "not remote", not "confirmed on-site".
+            "workplace_type": "ONSITE",
+            # Indeed is the only site supplying a language.
+            "language": "en",
+            # Indeed exposes no education requirements.
+            "education_requirements": None,
+            # INTENTIONAL BEHAVIOR CHANGE, declared (Constitution II). This asserted
+            # None while salarySnippet.source = "EXTRACTION" was unmapped; the
+            # 2026-07-17 scan resolved it to True and spec.md FR-005a records the
+            # decision as CLOSED.
+            #
+            # Indeed parsed the pay out of the job description -- employer-authored
+            # prose. The tri-state rule forced the call: False means "the site estimated
+            # this pay", which is plainly untrue (Indeed computed nothing), so False was
+            # ruled out; None would strand Indeed's entire salary population as
+            # "provenance unknown" when the provenance is known. salary_disclosed
+            # encodes provenance, not parse reliability.
+            #
+            # The old assertion was not weakened to make code pass -- the code changed
+            # first, for a recorded reason, and the assertion followed.
+            "salary_disclosed": True,
         },
     ),
     "glassdoor": (
@@ -223,6 +312,17 @@ CASES = {
             "remote": True,
             "salary_period": "ANNUAL",
             "posted_at": GD_POSTED_AT,
+            # --- 031 filter attributes ---
+            # json_ld employmentType ["PART_TIME"] wins OUTRIGHT over the header's
+            # jobType ["Full-time"]. FULL_TIME here would mean the structured field
+            # stopped winning, or the two got merged -- both are bugs.
+            "employment_type": "PART_TIME",
+            "workplace_type": "REMOTE",
+            # Glassdoor supplies no language.
+            "language": None,
+            # Both education labels joined in source order, none dropped.
+            "education_requirements": "Bachelor's degree; Master's degree",
+            "salary_disclosed": True,
         },
     ),
 }
@@ -277,6 +377,8 @@ async def test_dual_write_and_projection(client: httpx.AsyncClient, run_id: str)
                                s.salary_min, s.salary_max, s.salary_currency,
                                s.company, s.industry, s.remote,
                                s.salary_period, s.posted_at,
+                               s.employment_type, s.workplace_type, s.language,
+                               s.education_requirements, s.salary_disclosed,
                                s.matched, s.dismissed,
                                (s.source_row_id = p.id)            AS row_ref_ok,
                                (s.scrape_time  = p.scrape_time)    AS scrape_time_same,
@@ -331,6 +433,207 @@ async def test_dual_write_and_projection(client: httpx.AsyncClient, run_id: str)
             fail(f"{site}: matched/dismissed should both be false at ingest")
 
         ok(f"{site}: dual-write produced one per-source row + one canonical row, mapped")
+
+
+async def test_filter_attribute_edge_cases(
+    client: httpx.AsyncClient, run_id: str, tags: list[str]
+) -> None:
+    """The 031 branches the happy-path fixtures never reach.
+
+    Every one of these renders as a perfectly plausible row when it is wrong. A
+    FULL_TIME that should have been PART_TIME, or a `false` that should have been NULL,
+    looks exactly like real data -- which is why they are asserted end-to-end through
+    the API and the database rather than only in the unit tests.
+    """
+    # Precedence, through the real ingest path: a posting tagged both Full-time and
+    # Part-time keeps only the higher-precedence token. The other is DISCARDED and is
+    # not recoverable from the canonical row (it stays on the per-source row).
+    tag = f"MULTITYPE{TAG}"
+    tags.append(tag)
+    payload = indeed_payload(run_id, tag)
+    payload["source_raw"]["mosaic"]["jobTypes"] = ["Part-time", "Full-time"]
+    r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        fail(f"multi employment type: ingest returned {r.status_code}")
+    else:
+        row = await _row(
+            "SELECT s.employment_type, i.job_types "
+            "FROM scraped_jobs s JOIN indeed_jobs i ON i.id = s.source_row_id "
+            "WHERE s.job_url LIKE :pat",
+            tag,
+        )
+        if row["employment_type"] != "FULL_TIME":
+            fail(
+                f"multi employment type: got {row['employment_type']!r}, expected "
+                "FULL_TIME -- precedence must beat payload order (Part-time came first)"
+            )
+        else:
+            ok("multi-valued employment type -> FULL_TIME by precedence, not by order")
+        # The discarded value must survive on the raw row -- that is the entire escape
+        # hatch the lossy canonical column depends on.
+        if not row["job_types"] or "Part-time" not in row["job_types"]:
+            fail("multi employment type: the discarded value was lost from the raw row")
+        else:
+            ok("discarded 'Part-time' still recoverable from the per-source row")
+
+    # LinkedIn's workplace enum, end to end, in the shape the 2026-07-17 scan proved it
+    # actually sends: a URN map, not labels. The happy-path case only covers code 2
+    # (remote); onsite and hybrid postings are the majority of the corpus and were the
+    # ones silently NULLed before the warning review caught the wrong shape.
+    for code, expected, remote_allowed in (
+        (1, "ONSITE", False),
+        (3, "HYBRID", False),
+    ):
+        tag = f"URNTYPE{code}{TAG}"
+        tags.append(tag)
+        payload = linkedin_payload(run_id, tag)
+        payload["source_raw"]["data"]["workplaceTypesResolutionResults"] = {
+            f"*urn:li:fs_workplaceType:{code}": f"urn:li:fs_workplaceType:{code}"
+        }
+        payload["source_raw"]["data"]["workRemoteAllowed"] = remote_allowed
+        r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+        if r.status_code != 200:
+            fail(f"linkedin URN workplaceType:{code}: ingest returned {r.status_code}")
+            continue
+        got = await _scalar(
+            "SELECT workplace_type FROM scraped_jobs WHERE job_url LIKE :pat", tag
+        )
+        if got != expected:
+            fail(
+                f"linkedin URN workplaceType:{code}: got {got!r}, expected {expected!r} "
+                "-- the workplace enum must map from URN codes, not labels"
+            )
+        else:
+            ok(f"linkedin URN workplaceType:{code} -> {expected} via the real payload shape")
+
+    # 'Other' is a value LinkedIn legitimately sends. It must yield NULL *silently* --
+    # a warning here would fire for every such posting forever and bury the warnings
+    # that signal real vocabulary drift.
+    tag = f"OTHERTYPE{TAG}"
+    tags.append(tag)
+    payload = linkedin_payload(run_id, tag)
+    payload["source_raw"]["data"]["formattedEmploymentStatus"] = "Other"
+    r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        fail(f"'Other' employment status: ingest returned {r.status_code}")
+    else:
+        got = await _scalar(
+            "SELECT employment_type FROM scraped_jobs WHERE job_url LIKE :pat", tag
+        )
+        if got is not None:
+            fail(f"'Other' employment status: expected NULL, got {got!r}")
+        else:
+            ok("'Other' -> NULL employment_type, posting still ingested")
+
+    # EXTRACTION is Indeed's entire live salary population, resolved to True by the
+    # 2026-07-17 review. Asserted end to end alongside the amounts it describes: unlike
+    # Glassdoor, Indeed's source flag and its salary figures come from the same payload,
+    # so True here genuinely describes the numbers on this row.
+    tag = f"EXTRACTSAL{TAG}"
+    tags.append(tag)
+    payload = indeed_payload(run_id, tag)
+    r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        fail(f"indeed EXTRACTION salary: ingest returned {r.status_code}")
+    else:
+        row = await _row(
+            "SELECT s.salary_disclosed, s.salary_min, i.salary_snippet_source "
+            "FROM scraped_jobs s JOIN indeed_jobs i ON i.id = s.source_row_id "
+            "WHERE s.job_url LIKE :pat",
+            tag,
+        )
+        if row["salary_snippet_source"] != "EXTRACTION":
+            fail(f"fixture drift: expected EXTRACTION, got {row['salary_snippet_source']!r}")
+        elif row["salary_disclosed"] is not True:
+            fail(
+                f"EXTRACTION: salary_disclosed is {row['salary_disclosed']!r}, expected "
+                "True -- Indeed parsed employer-authored prose, it estimated nothing"
+            )
+        elif row["salary_min"] is None:
+            fail("EXTRACTION: the amounts it describes are missing")
+        else:
+            ok("indeed EXTRACTION -> salary_disclosed True, raw source preserved")
+
+    # An unrecognized salary source must NOT resolve to False. False claims "this site
+    # estimated the pay" -- a claim an unreadable token cannot support.
+    tag = f"BADSALSRC{TAG}"
+    tags.append(tag)
+    payload = indeed_payload(run_id, tag)
+    payload["source_raw"]["mosaic"]["salarySnippet"]["source"] = "SOME_NEW_SOURCE"
+    r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        fail(f"unknown salary source: ingest returned {r.status_code}")
+    else:
+        row = await _row(
+            "SELECT salary_disclosed, salary_min FROM scraped_jobs WHERE job_url LIKE :pat",
+            tag,
+        )
+        if row["salary_disclosed"] is False:
+            fail(
+                "unknown salary source resolved to False -- it must be NULL; False "
+                "asserts the site published an estimate it never published"
+            )
+        elif row["salary_disclosed"] is not None:
+            fail(f"unknown salary source: expected NULL, got {row['salary_disclosed']!r}")
+        elif row["salary_min"] is None:
+            fail("unknown salary source: the amounts were dropped; only the flag should be")
+        else:
+            ok("unknown salary source -> NULL (never False), amounts retained")
+
+    # A site that says nothing about a filter attribute yields NULL -- never a negative
+    # assertion it did not make.
+    tag = f"NOFILTER{TAG}"
+    tags.append(tag)
+    payload = linkedin_payload(run_id, tag)
+    del payload["source_raw"]["data"]["formattedEmploymentStatus"]
+    del payload["source_raw"]["data"]["workplaceTypesResolutionResults"]
+    del payload["source_raw"]["data"]["salaryInsights"]
+    r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        fail(f"silent site: ingest returned {r.status_code}")
+    else:
+        row = await _row(
+            "SELECT employment_type, workplace_type, salary_disclosed "
+            "FROM scraped_jobs WHERE job_url LIKE :pat",
+            tag,
+        )
+        wrong = {k: v for k, v in row.items() if v is not None}
+        if wrong:
+            fail(f"silent site: expected all NULL, got {wrong!r}")
+        else:
+            ok("site that says nothing -> NULL, not a negative assertion")
+
+    # Glassdoor: no education labels -> the experience prose fills the column, which
+    # means education_requirements and experience_level carry IDENTICAL text. That
+    # duplication is deliberate (accepted to populate education for more rows); it is
+    # asserted so nobody "fixes" it without reading why.
+    tag = f"EDUPROSE{TAG}"
+    tags.append(tag)
+    payload = glassdoor_payload(run_id, tag)
+    del payload["source_raw"]["jobListing"]["jobDetailsRawData"]["jobview"]["header"][
+        "indeedJobAttribute"
+    ]
+    r = await client.post("/jobs/ingest", headers=HEADERS, json=payload)
+    if r.status_code != 200:
+        fail(f"education fallback: ingest returned {r.status_code}")
+    else:
+        row = await _row(
+            "SELECT education_requirements, experience_level "
+            "FROM scraped_jobs WHERE job_url LIKE :pat",
+            tag,
+        )
+        if row["education_requirements"] != "5+ years backend":
+            fail(
+                f"education fallback: got {row['education_requirements']!r}, expected "
+                "the experience prose"
+            )
+        elif row["education_requirements"] != row["experience_level"]:
+            fail("education fallback: expected the SAME text in both columns")
+        else:
+            ok(
+                "education falls back to experience prose, duplicating experience_level "
+                "(deliberate -- FR-012a)"
+            )
 
 
 async def test_transform_edge_cases(client: httpx.AsyncClient, run_id: str) -> None:
@@ -662,6 +965,7 @@ async def main() -> None:
             await test_dual_write_and_projection(client, run_id)
             # Depends on the MERGE* rows the projection test just created.
             await test_cross_site_ordering(client, run_id)
+            await test_filter_attribute_edge_cases(client, run_id, tags)
             await test_transform_edge_cases(client, run_id)
             await test_rescrape_is_noop(client, run_id)
             await test_atomicity(client, run_id)

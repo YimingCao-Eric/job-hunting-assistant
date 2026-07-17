@@ -134,6 +134,60 @@ class ScrapedJob(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- Filter attributes (migration 031) ----------------------------------
+    #
+    # Five nullable attributes that let a filtering/matching service read this table
+    # alone. Deliberately NOT exposed by ScrapedJobRead: they exist in the table and on
+    # this model, but GET /jobs is byte-identical to before 031. That omission is load
+    # bearing -- "completing" the response schema would change the API contract.
+    #
+    # NULL means "this site did not say" -- never "no". It is not a default; no column
+    # here has one.
+
+    # Exactly one of: FULL_TIME | PART_TIME | CONTRACT | TEMPORARY | INTERNSHIP |
+    # VOLUNTEER. Single-valued: where a site states several arrangements, precedence
+    # picks one and the rest are discarded (they survive on the per-source row).
+    # LinkedIn's/Glassdoor's literal "Other" is recognized-but-unmappable -> None,
+    # without a warning: the site answered correctly, it just maps to no token.
+    employment_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # Exactly one of: REMOTE | HYBRID | ONSITE.
+    #
+    # NOT a refinement of `remote`, and the two may legitimately disagree:
+    #   - LinkedIn: `remote` reads work_remote_allowed; this reads
+    #     workplace_types_labels -- different source fields, labels win here
+    #   - Glassdoor: a hybrid-only posting is remote=True *and* workplace_type=HYBRID
+    #   - Indeed: same source, so consistent -- but ONSITE there means only "not
+    #     remote" (Indeed cannot express hybrid)
+    # Consumers must pick one column per filter and not mix them.
+    workplace_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # Bare lowercase base code (en-US -> en). Validated for shape, not membership:
+    # any 2-3 ASCII letters is accepted; there is no allow-list of real languages.
+    # Indeed-only -- LinkedIn and Glassdoor do not supply it.
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    # Free text, no vocabulary, never validated. Glassdoor-only: all education labels
+    # joined with "; ", else the experience-requirements prose.
+    #
+    # Known duplication: on that fallback this holds the same text as experience_level,
+    # which projects the same source field. The two agreeing is not corroboration --
+    # it is one value counted twice.
+    education_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Tri-state provenance of the salary figures, never collapsed:
+    #   True  -> the source attributes them to the employer
+    #   False -> the source attributes them to the site's own estimate
+    #   None  -> nothing was said, or the token was unrecognized
+    # `False` is a claim, not a default. It is about provenance, not presence: True
+    # does not imply salary_min/max exist.
+    #
+    # Known limitation (Glassdoor): salary_source comes from jobDetailsData while
+    # salary_min/max come from the employer's JSON-LD baseSalary -- two payloads, so
+    # this flag may describe a different figure than the amounts beside it. Inherited
+    # from 030 (salary_period splits the same way), not introduced by 031.
+    salary_disclosed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
     # No source_raw: raw payloads stay on the per-source rows, reachable via
     # source_row_id. No dedup or matching columns -- when matching returns, its
     # attributes belong here rather than on the per-source tables.

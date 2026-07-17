@@ -1,14 +1,20 @@
-# Live per-source table schemas (as of 2026-07-15)
+# Live per-source table schemas (as of 2026-07-17)
 
 Captured directly from the running database (`\d` introspection), **post search-only split**.
 This is **ground truth** for the per-source tables and the canonical mapping; it is the only
 schema doc still maintained. (An older `docs/current-schemas.md` documented 51/61/69 columns
 for these tables; it was deleted, and its counts never matched the live tables anyway.)
 
-**The unified `scraped_jobs` table described below is implemented** (Alembic migration `030`)
-and populated by dual-write at ingest. The "Proposed" heading below is historical — the
+**The unified `scraped_jobs` table described below is implemented** (Alembic migrations `030` +
+`031`) and populated by dual-write at ingest. The "Proposed" heading below is historical — the
 section now documents the table as built. Three details differ from this document's original
 proposal; each is marked **[as-built]** where it appears.
+
+`031` added five **filter attributes** (`employment_type`, `workplace_type`, `language`,
+`education_requirements`, `salary_disclosed`) so a filtering/matching service can read
+`scraped_jobs` alone — 22 → **27 columns**, still three indexes. Their per-site mapping,
+consumer caveats, and live-verified vocabulary provenance are in
+[Filter attributes (migration `031`)](#filter-attributes-migration-031--normalized-at-merge).
 
 ## Column-count summary
 
@@ -261,6 +267,71 @@ by **dual-write at ingest**: each `POST /jobs/ingest` writes its per-source tabl
 |---|---|---|---|---|---|
 | `posted_at` | timestamptz | `listed_at` (bigint epoch-ms) | `pub_date` (bigint epoch-ms) | `date_posted` (date) | LI/Indeed: epoch-ms → UTC instant. GD: date → **midnight UTC**. **[as-built]** Done in Python, not SQL: a bare `date_posted::timestamptz` resolves midnight in the *server's* TimeZone, which would make `posted_at` depend on deployment config and shift Glassdoor rows against the other two sites' (inherently UTC) epoch values. Out-of-range/non-numeric → NULL + `projection_bad_posted_at` warning; never fails ingest |
 
+### Filter attributes (migration `031`) — normalized at merge
+
+Five nullable columns added so a filtering/matching service can read `scraped_jobs` **alone**,
+without joining the per-source tables. All five are populated by the same atomic dual-write; the
+per-source tables are unchanged.
+
+**NULL means "this site did not say" — never "no".** No column has a default.
+
+| Merged column | Type | ← linkedin_jobs | ← indeed_jobs | ← glassdoor_jobs | Transform |
+|---|---|---|---|---|---|
+| `employment_type` | varchar(16) | `formatted_employment_status` | `job_types` (jsonb list) | `employment_type` (jsonb) → else `job_type` (jsonb) | **Normalize vocab** → closed seven-value set `FULL_TIME`/`PART_TIME`/`CONTRACT`/`TEMPORARY`/`INTERNSHIP`/`PERMANENT`/`VOLUNTEER`. **Single-valued**: several stated → precedence picks one, rest discarded. `Other` → NULL, *no warning*. Unrecognized → NULL + `projection_unknown_employment_type`. GD: structured field wins outright when non-empty (header ignored, never merged) |
+| `workplace_type` | varchar(16) | `workplace_types_labels` (**URN enum**) | `remote_location` (boolean) | `remote_work_types` (jsonb) | → `REMOTE`/`HYBRID`/`ONSITE`. **LI: the live payload is a URN map** `{"*urn:li:fs_workplaceType:2": "urn:li:fs_workplaceType:2"}` — no labels; codes **1=ONSITE, 2=REMOTE, 3=HYBRID**. Indeed: `true`→REMOTE, `false`→**ONSITE** (see caveat). Precedence `REMOTE › HYBRID › ONSITE` |
+| `language` | varchar(8) | *(none → NULL)* | `language` | *(none → NULL)* | Bare lowercase base code (`en-US`→`en`); region subtag dropped. **Shape-validated, not membership**: 2–3 ASCII letters, no allow-list. Bad shape → NULL + `projection_bad_language` |
+| `education_requirements` | text | *(none → NULL)* | *(none → NULL)* | `education_labels` (jsonb) → else `experience_requirements_description` | All labels joined `"; "` in source order, none dropped. Free text — **never validated, never warns** |
+| `salary_disclosed` | boolean | `salary_provided_by_employer` | `salary_snippet_source` | `salary_source` | Tri-state provenance: `true`=employer stated the pay, `false`=the site estimated it, NULL=nothing said. **`false` is a claim, never a default**; an unrecognized token → NULL + `projection_unknown_salary_source`, never `false` |
+
+**Per-site `salary_disclosed` tokens** (matched on the normalized token — uppercased, spaces/hyphens → `_`):
+
+| Site | → `true` | → `false` | → NULL |
+|---|---|---|---|
+| LinkedIn | boolean `true` | boolean `false` | absent (the boolean admits no unrecognized state) |
+| Indeed | `EMPLOYER`, **`EXTRACTION`** | `ESTIMATE`, `ESTIMATED`, `INDEED_ESTIMATE` | absent/empty; unrecognized → NULL + warn |
+| Glassdoor | `EMPLOYER`, `EMPLOYER_PROVIDED`, `EMPLOYER_PROVIDED_SALARY` | `ESTIMATE`, `ESTIMATED`, `GLASSDOOR_ESTIMATE` | absent/empty; unrecognized → NULL + warn |
+
+#### Caveats a consumer must know
+
+- **`workplace_type` is NOT a refinement of `remote`, and the two legitimately disagree.** LinkedIn
+  reads *different source fields* for each (`remote` ← `work_remote_allowed`; `workplace_type` ←
+  `workplace_types_labels`; the labels win, and a contradiction logs
+  `projection_workplace_remote_conflict`). Glassdoor reads the *same* field under different rules —
+  a hybrid-only posting is `remote = true` **and** `workplace_type = HYBRID`. Only Indeed shares one
+  source. **Pick one column per filter and never mix them.**
+- **Indeed `ONSITE` means only "not remote".** Indeed cannot express hybrid, so its hybrid postings
+  are recorded `ONSITE`. This is the one value in the table asserting more than the site said.
+- **Glassdoor `workplace_type` is NULL on live rows.** `remote_work_types` comes back empty from the
+  scraper, so there is nothing to map. This is a **scraper-layer gap, not a projection defect** —
+  the projection is correct to write NULL for a field the row does not carry. Follow-up belongs in
+  the extension, not here.
+- **Glassdoor `salary_disclosed` may describe a different figure than the row's salary.**
+  `salary_source` comes from `jobDetailsData`, while `jsonld_salary_min`/`max` come from the
+  employer-authored JSON-LD `baseSalary` — two payloads. Inherited from `030`, which already reads
+  `salary_period` from `jobDetailsData` while reading the amounts from JSON-LD.
+- **`education_requirements` may duplicate `experience_level`.** When a Glassdoor posting has no
+  education labels, both columns carry the same experience prose. Them agreeing is *not*
+  corroboration — it is one value counted twice.
+- **Multi-valued postings are lossy.** A posting tagged both `Full-time` and `Part-time` stores only
+  `FULL_TIME` and will not answer a part-time filter. The discarded values survive only on the
+  per-source row, via `source_row_id`.
+
+#### Vocabulary provenance — verified against the 2026-07-17 scan
+
+The `031` vocabularies shipped **reasoned, not observed** (only Glassdoor `remoteWorkTypes:
+["REMOTE"]` was attested), with unrecognized tokens warning so the first real scan would correct
+them. It did. Three gaps found and **closed**:
+
+| Finding | Resolution |
+|---|---|
+| LinkedIn `workplace_types_labels` is a **URN map**, not labels — the original mapping assumed `localizedName` objects and NULLed every LinkedIn row | Map the enum codes `URN:LI:FS_WORKPLACETYPE:1/2/3` → `ONSITE`/`REMOTE`/`HYBRID`. Codes are locale-proof; labels are not |
+| Indeed sends `"Permanent"` as a `job_types` entry | New canonical token **`PERMANENT`** (vocabulary 6 → 7). It is a *tenure* axis, not hours — a permanent part-time job exists — so it is not folded into `FULL_TIME`. Ranked **below** the hours tokens, so `["Full-time","Permanent"]` still yields `FULL_TIME` |
+| Indeed `salary_snippet_source` is `"EXTRACTION"` for its entire salary population | **`true`** (employer-disclosed). Indeed parsed the pay from employer-authored prose; it estimated nothing, so the tri-state rule ruled `false` out, and NULL would strand every Indeed salary as "provenance unknown" when it is known. `salary_disclosed` encodes provenance, not parse reliability |
+
+Still **deliberately unmapped**, pending evidence: `FREELANCE`, `PER_DIEM`, `APPRENTICESHIP`,
+`COMMISSION`, `NEW_GRAD`. Each has a defensible mapping and a defensible objection; guessing writes
+a wrong token no warning surfaces, while leaving them unmapped writes NULL and warns.
+
 ### Raw payload — NOT carried on the unified row
 
 `source_raw` is **omitted** from the unified table (spec 008 FR-005a — decision Q3=A). The raw
@@ -269,8 +340,10 @@ that row. This avoids duplicating the heaviest column in the schema for every po
 
 ### As-built DDL
 
-This is what migration `030` created — 22 columns, three indexes. Verified against `\d
-scraped_jobs` on the running database.
+This is what migrations `030` + `031` created — **27 columns, three indexes**. Verified against
+`\d scraped_jobs` on the running database. `030` created the first 22; `031` added the five filter
+attributes at the end, additively, with **no new index** (CC-12 — the consuming service does not
+exist yet, so no query has demonstrated a need).
 
 ```sql
 CREATE TABLE scraped_jobs (
@@ -298,7 +371,14 @@ CREATE TABLE scraped_jobs (
     salary_currency varchar(3),
     salary_period   varchar(16),                    -- normalized vocab; NULL when unrecognized
 
-    posted_at       timestamptz                     -- normalized from epoch-ms / date
+    posted_at       timestamptz,                    -- normalized from epoch-ms / date
+
+    -- Filter attributes (031). Nullable, no defaults, no indexes.
+    employment_type        varchar(16),  -- closed 7-value vocab; single-valued (precedence)
+    workplace_type         varchar(16),  -- REMOTE|HYBRID|ONSITE; NOT a refinement of `remote`
+    language               varchar(8),   -- Indeed only; bare base code, shape-validated
+    education_requirements text,         -- Glassdoor only; free text, "; "-joined labels
+    salary_disclosed       boolean       -- tri-state provenance; false is a claim, not a default
     -- no source_raw: raw payload stays on the per-source row, reached via source_row_id
 );
 CREATE INDEX ix_scraped_jobs_scan_run_id ON scraped_jobs(scan_run_id);

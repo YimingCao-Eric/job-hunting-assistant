@@ -130,10 +130,18 @@ curl http://localhost:8000/health
 docker compose exec backend python smoke_test_auto_scrape.py
 docker compose exec backend python smoke_test_matched_claim.py
 docker compose exec backend python smoke_test_auto_expiration.py
+docker compose exec backend python smoke_test_scraped_jobs_merge.py
+docker compose exec backend python unit_test_scraped_job_projection.py
 docker compose exec backend python scripts/verify_matched_column.py
 ```
 
-**`smoke_test_auto_scrape.py`** hits admin auto-scrape routes, extension/run-log flows, and post-scrape orchestration helpers. **`smoke_test_matched_claim.py`** and **`smoke_test_auto_expiration.py`** exercise DB helpers for matched-claim and shelf-life expiration (expect migrations through **029** and valid FK-backed **`extension_run_logs`** where noted in each script). **`scripts/verify_matched_column.py`** confirms **`matched`** after migration **028**.
+> **Rebuild first.** The `backend` service has **no source mount** — code is baked into the image at
+> build time, so a host edit changes nothing in the container until `docker compose up -d --build
+> backend`. This fails *silently*: a new migration can report the old head and exit 0, exactly as if
+> the file did not exist. If a change appears to have no effect, suspect a stale image before
+> suspecting the code.
+
+**`smoke_test_auto_scrape.py`** hits admin auto-scrape routes, extension/run-log flows, and post-scrape orchestration helpers. **`smoke_test_matched_claim.py`** and **`smoke_test_auto_expiration.py`** exercise DB helpers for matched-claim and shelf-life expiration (expect migrations through **031** and valid FK-backed **`extension_run_logs`** where noted in each script). **`smoke_test_scraped_jobs_merge.py`** is the behavioral contract for the unified `scraped_jobs` dual-write and its per-site projection (migrations **030**–**031**). **`unit_test_scraped_job_projection.py`** covers the projection's pure functions — no database, no HTTP. **`scripts/verify_matched_column.py`** confirms **`matched`** after migration **028**.
 
 ## Config Reference
 
@@ -270,7 +278,38 @@ Includes run metadata, counters, `search_filters`, **`scan_all`**, **`scan_all_p
 - **`extension_state`**: includes `scan_requested`, `stop_requested`, `scan_website`, and pending **Scan All** fields (`scan_all`, `scan_all_position`, `scan_all_total`) cleared when **`GET /pending-scan`** consumes a request.
 - **`dedup_tasks`**: one row per **post-scan sync dedup** background run (ties to **`extension_run_logs.id`** via **`scan_run_id`**); **`last_heartbeat_at`** updated while running. Orphan **`running`** rows are marked **failed** on API startup (**`dedup_task_cleanup`**).
 - **`extension_run_logs`**: stores per-run **`scan_all`** metadata so the backend knows whether to run **sync dedup** only on the last leg of Scan All; optional **`debug_log`** (JSONB) holds a ring-buffered event stream for scan troubleshooting (**`POST /extension/run-log/{id}/debug`**). Updates are broadcast to **`/ws/run-log`** subscribers when the extension PUTs completion or mirrored progress (**`broadcast_run_log_update`**).
-- **`scraped_jobs`**: `original_job_id` for ingest-time content duplicate; **`dedup_original_job_id`** for dedup “kept” row when removed as duplicate; optional **`dedup_similarity_score`** for cosine matches. Pass 2 resolves in-memory chains before writing; cosine skips jobs already flagged in the same run as similarity “originals.”
+- **`scraped_jobs`** — the unified, site-agnostic canonical table (**27 columns**, three indexes;
+  Alembic **030** + **031**). A **derived** table: every `POST /jobs/ingest` writes its per-source
+  row **and** one canonical row in a single transaction. The per-source tables stay source-shaped
+  and unnormalized; all normalization lives here. `source_raw` is **not** carried — follow
+  **`source_row_id`** back to the per-source row. Authoritative mapping:
+  [**docs/live-per-source-schemas.md**](docs/live-per-source-schemas.md).
+  - **`031` filter attributes** — five nullable columns so a future filtering/matching service can
+    read this table alone: **`employment_type`**, **`workplace_type`**, **`language`**,
+    **`education_requirements`**, **`salary_disclosed`**. **NULL always means "this site did not
+    say"** — never "no", never a default. They are deliberately **not** exposed by `GET /jobs`.
+  - **`employment_type`** — a closed **seven**-token vocabulary: `FULL_TIME`, `PART_TIME`,
+    `CONTRACT`, `TEMPORARY`, `INTERNSHIP`, **`PERMANENT`**, `VOLUNTEER`. Single-valued: where a site
+    states several, precedence picks one and the rest are discarded (they survive on the per-source
+    row). `PERMANENT` is a **tenure** axis, not hours — a permanent part-time job exists — so it
+    ranks below the hours tokens and surfaces only when it is the sole signal.
+  - **`workplace_type`** — `REMOTE` / `HYBRID` / `ONSITE`, populated for **LinkedIn and Indeed
+    only**. Every live **Glassdoor** row is NULL because the scraper returns `remote_work_types`
+    empty; the projection is correct and the mapping is already in place, so it populates the moment
+    the extension supplies the field (spec 009 **FR-005f** / **SC-002a** — scraper-layer work, not a
+    projection defect). Note `workplace_type` is **not** a refinement of `remote` and the two may
+    legitimately disagree: pick one column per filter and do not mix them.
+- ⚠️ **Stale below this line (pre-`030`).** The `GET /jobs` shape and `scraped_jobs` notes elsewhere
+  in this README still describe the **legacy** LinkedIn-shaped table and the retired dedup/matching
+  pipeline — `original_job_id`, `dedup_original_job_id`, `dedup_similarity_score`, `website`,
+  `skip_reason`, `has_report`, "matching pipeline fields". **None of those columns exist**: the
+  `dedup/`, `matching/`, and `profile/` packages were removed by the search-only split, and `030`
+  drop-and-recreated `scraped_jobs`. The live `GET /jobs` item carries 22 fields (`source_site`,
+  `title`, `company`, `location_text`, `description`, `remote`, `apply_url`, `experience_level`,
+  `industry`, `salary_*`, `posted_at`, `matched`, `dismissed`, provenance). Flagged rather than
+  rewritten here: that rot predates this feature and spans the split, so correcting it is its own
+  docs pass (already tracked in the constitution's follow-up TODOs). Trust
+  [**docs/live-per-source-schemas.md**](docs/live-per-source-schemas.md) over this file.
 - **`dedup_reports`**: persisted metrics per manual or post-scan dedup run; optional **`debug_log`** JSONB (`{ "events": [ … ] }`) flushed at end of **`run_dedup`**.
 - **`match_reports`**: pipeline run metrics; optional **`debug_log`** JSONB flushed at end of each matching **`run_*`** stage.
 - **`job_reports`**: user-submitted issue reports (match level, YOE, skills, wrong gate, etc.). Status `pending` \| `dismissed` \| `actioned`. Not cleared by matching/dedup undo endpoints; **`has_report`** on job API responses reflects **pending** rows only.
