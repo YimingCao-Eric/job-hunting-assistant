@@ -1,6 +1,53 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.1.0 → 1.1.1
+Bump rationale: PATCH. A factual clarification, not a governance change. No principle
+  removed, renamed, or redefined (which would be MAJOR); nothing added and no guidance
+  materially expanded (which would be MINOR). Feature 010 retired the post-scrape
+  matched-claim and deleted `auto_scrape/matching_claim.py`, which made exactly ONE
+  statement in this file false: the Additional Constraints → Module layout parenthetical
+  describing `auto_scrape/` as "(post-scrape pipeline: expiration, claim, orchestration)".
+  Corrected, plus a note recording where the claim went.
+
+Considered and REJECTED — do not re-derive (feature 010 research D5):
+  The tempting reading is that retiring the auto-claim falsifies FOUR sites here and
+  needs a MAJOR amendment redefining data-model invariants. It does not. Verified
+  clause-by-clause:
+  - Principle V's permitted-mutation clauses (per-source and unified) are ACTOR-AGNOSTIC.
+    They state the `matched` claim-flip is a PERMITTED mutation; they never say the
+    post-scrape run performs it, and never require that anything does. Removing the only
+    performer leaves a permitted-but-unperformed mutation, which satisfies the clause
+    unchanged. The invariant is not broken by the claim's absence — it is WAITING for the
+    downstream service. UNAMENDED, deliberately.
+  - Principle V's agreement clause ("the two never disagree") is likewise actor-agnostic.
+    Combined with Principle IV's atomic-multi-table-write rule, it already binds whoever
+    performs the flip — so the obligation transfers to the downstream claimer for free.
+    That actor-neutrality is load-bearing: hardcoding an actor would destroy it. UNAMENDED.
+  - Principle II pins its authoritative tests BY FILENAME. `smoke_test_matched_claim.py`
+    survives under its own name (repurposed to assert no automatic claim occurs, and that
+    the flag's invariants still hold). The list stays accurate. The clause already permits
+    tests "deliberately and reviewably updated when behavior intentionally changes" —
+    exactly this case. UNAMENDED.
+  Two independent readings defaulted to the naive "4 sites / MAJOR" version. Read the
+  clause, not a summary.
+
+Modified principles: none. Content changes:
+  Additional Constraints → Module layout — `auto_scrape/` no longer lists "claim" as one
+    of its responsibilities; `matching_claim.py` recorded as removed by feature 010.
+
+Templates propagated: none required. Verified by search: no file under
+  `.specify/templates/`, `.specify/scripts/`, or the command files references the claim,
+  the `matched` flag, or the post-scrape phase structure.
+
+Deferred and NOT decided here: whether an external claimer may reset `matched` back to
+  `false` (blacklist re-entry). CC-1 permits `false → true` and "no other in-place
+  updates", so such a write would need its own governance decision. The downstream
+  service's design plans it and tracks it as its RE-ENTRY-WRITE question. Feature 010
+  deliberately does not pre-empt that decision in either direction (spec 010 FR-004c).
+
+Previous report (1.0.0 → 1.1.0) retained below.
+==================
 Version change: 1.0.0 → 1.1.0
 Bump rationale: MINOR. No principle removed, renamed, or redefined — all seven still
   hold and keep their numbering. The bump covers materially expanded guidance: a new
@@ -197,12 +244,14 @@ Observed conventions that are standards for this codebase:
 
 - **Module layout (backend):** feature-oriented packages under `backend/` — `models/`
   (SQLAlchemy tables), `schemas/` (Pydantic models), `routers/` (HTTP routes), `core/`
-  (cross-cutting infrastructure), `auto_scrape/` (post-scrape pipeline: expiration, claim,
+  (cross-cutting infrastructure), `auto_scrape/` (post-scrape pipeline: expiration,
   orchestration), and `alembic/` (migrations). `main.py` is the app entrypoint;
   `scheduler.py` hosts scheduled work; one-off utilities live under `scripts/`. New code
   follows this layout; do not introduce parallel or catch-all modules. The `dedup/`,
   `matching/`, and `profile/` packages were removed by the search-only split — do not
-  reintroduce them without a spec that says why.
+  reintroduce them without a spec that says why. `matching_claim.py` was removed by the
+  matched-claim retirement (feature 010) — the post-scrape run no longer claims rows;
+  `matched` stays `false` for a downstream filtering/matching service to claim itself.
 - **Naming:** `snake_case` for Python identifiers and DB columns. Where existing names are
   inconsistent (e.g. `scrape_run_id` / `scan_run_id` / `runId` all denoting a run-log UUID),
   document the inconsistency in the spec (Principle I); do not rename as a drive-by change
@@ -252,4 +301,4 @@ changes are made against the system.
   per-source tables and the canonical merged mapping — consult
   `docs/live-per-source-schemas.md`, which is authoritative over any older schema doc.
 
-**Version**: 1.1.0 | **Ratified**: 2026-07-14 | **Last Amended**: 2026-07-15
+**Version**: 1.1.1 | **Ratified**: 2026-07-14 | **Last Amended**: 2026-07-16

@@ -6020,13 +6020,21 @@ Per-cycle hook in the post-scrape orchestrator. After every scrape cycle complet
 status: scrape_complete (extension orchestrator finished matrix loop)
    ↓
 status: postscrape_running
-   ├─ Phase 1 (NEW): auto-expiration
+   ├─ Phase 1: auto-expiration
    │     ├─ Reads shelf_life_days from system_settings
-   │     ├─ DELETEs from all three per-source tables in one transaction
+   │     ├─ DELETEs from all three per-source tables AND canonical scraped_jobs
+   │     │   in one transaction
    │     └─ Writes results to cycle.cleanup_results JSONB
-   ├─ Phase 2: matched-claim (§30)
-   └─ Phase 3: dedup → matching → match_results (still stubbed)
+   └─ finalize: status=post_scrape_complete, completed_at,
+         match_results={"claim_summary": None, "claim_retired": True}
 ```
+
+> **[retired 2026-07 — feature 010]** This flow used to continue `├─ Phase 2: matched-claim
+> (§30)` and `└─ Phase 3: dedup → matching → match_results (still stubbed)`. Neither exists.
+> The matched-claim was retired so `matched` stays `false` for the standalone
+> filtering/matching service to claim itself; `auto_scrape/matching_claim.py` is deleted. The
+> dedup/matching stubs were deleted by the search-only split. §30 below is retained as
+> history — see the banner there.
 
 **Why per-cycle hook, not hourly cron.** Earlier design considered an hourly APScheduler job. The per-cycle hook was chosen because:
 - It runs only when there's actual scrape activity — no deletion when system is paused (defensive: nothing surprising happens behind the user's back)
@@ -6115,7 +6123,28 @@ UPDATE glassdoor_jobs SET matched = TRUE WHERE matched = FALSE RETURNING *;
 
 ### 30.4 The `claim_unmatched_rows` helper
 
-`backend/auto_scrape/matching_claim.py`:
+> ## ⚠️ RETIRED 2026-07 — feature 010. This code no longer exists.
+>
+> `backend/auto_scrape/matching_claim.py` was **deleted** and the post-scrape run no longer
+> claims rows. Everything in §30 below describes how the claim worked while it existed; it is
+> kept as history (how the mechanism shipped, and why it was built this way), **not** as a
+> description of current behavior. Do not code against it.
+>
+> **What changed:** the claim was built to hand rows to the dedup/matching pipelines. Those were
+> deleted by the search-only split, leaving `matched` written on every row and read by nothing.
+> Worse, the planned standalone filtering/matching service claims rows itself with
+> `WHERE matched = FALSE` — so pre-claiming everything at the end of every cycle would have left
+> it zero rows. Retiring the claim was its one hard blocker.
+>
+> **Current behavior:** `matched` defaults `false` at ingest and stays `false`. The column
+> remains on all four tables as the downstream service's processed-marker. The post-scrape run
+> is: auto-expiration, then finalize. See `docs/current-workflow.md` §5.
+>
+> **Retired for free:** the crash window described in §30 (rows flipped in one transaction, the
+> summary written in another — a crash between them left rows permanently claimed with no
+> record, unable to be re-claimed) cannot occur, because nothing flips them.
+
+`backend/auto_scrape/matching_claim.py` (deleted — recoverable from git history):
 
 ```python
 async def claim_unmatched_rows(db: AsyncSession) -> dict[str, list[dict]]:
@@ -6308,6 +6337,13 @@ async def run_post_scrape_phase(cycle_id):
 Both `_run_dedup_for_cycle` and `_run_matching_for_cycle` are stubs that return `None` / log and return. `_compute_match_results` returns `{}`.
 
 ### 32.2 What Step 7 changed
+
+> **[historical — superseded 2026-07 by feature 010]** The listing below is how Step 7 left
+> `run_post_scrape_phase` at the time. **The Phase 2 matched-claim shown here no longer exists**;
+> nor does `claim_unmatched_rows`, nor the `_run_dedup_for_cycle` / `_run_matching_for_cycle` /
+> `_compute_match_results` stubs (deleted by the search-only split). The function today is:
+> auto-expiration → finalize, with `match_results={"claim_summary": None, "claim_retired": True}`
+> folded into the finalize write. See `docs/current-workflow.md` §5 for current behavior.
 
 The change is a TARGETED INSERTION of two new phases at the top of the `try:` block, plus modification of the single `_update_cycle(match_results=...)` call to merge `claim_summary`. **Nothing else changes.**
 
@@ -6540,8 +6576,10 @@ For changes to the orchestrator itself, run a multi-hour validation:
    - Job attribution: every `scraped_jobs.scan_run_id` matches its run-log's `search_filters.website`
    - No stuck flags
    - `cleanup_results` populated on every completed cycle
-   - `match_results.claim_summary` populated on every completed cycle
-   - Per-source rows have `matched=true` after their cycle completes
+   - `match_results` populated on every completed cycle — since feature 010 that is
+     `{"claim_summary": null, "claim_retired": true}`; before it, real per-site counts
+   - Per-source rows are **`matched=false`** after their cycle completes (feature 010 —
+     was `true` while the claim existed)
 
 ### The clean-baseline reset
 
@@ -6603,10 +6641,17 @@ Common failure mode: agent claims "implementation complete" but the change never
 For backend:
 ```bash
 docker compose exec backend python -c "
-from auto_scrape.matching_claim import claim_unmatched_rows
-print(claim_unmatched_rows.__module__)
+from auto_scrape.post_scrape_orchestrator import run_post_scrape_phase
+print(run_post_scrape_phase.__module__)
 "
-# Expected: auto_scrape.matching_claim
+# Expected: auto_scrape.post_scrape_orchestrator
+```
+
+The same trick proves a **deletion** landed — assert the import now fails:
+```bash
+docker compose exec backend python -c "import auto_scrape.matching_claim"
+# Expected: ModuleNotFoundError (the module was deleted by feature 010).
+# If it imports, the image is stale -- rebuild.
 ```
 
 For extension SW:
@@ -6898,6 +6943,8 @@ Current set, kept synchronized:
 ### The line drawn at this milestone
 
 The matched mechanism implementation completes the foundation for the post-scrape pipeline. Per-source tables exist with proper conventions; auto-expiration keeps them bounded; matched-claim provides a clean contract between scrape and matching; the orchestrator wires all three together with strict invariants documented and verified.
+
+> **[retired 2026-07 — feature 010]** The matched-claim half of that summary no longer holds. The claim was retired and `auto_scrape/matching_claim.py` deleted: the "contract between scrape and matching" had no counterparty once the search-only split deleted matching, and pre-claiming every row would have starved the standalone filtering/matching service that now owns the claim. What survives from this work: the per-source tables, their conventions, auto-expiration, the orchestrator, and the `matched` column itself — which stays `false` after a scrape as that service's processed-marker.
 
 Anything beyond this point — wiring dedup, integrating matching, building auto-apply — is a separate workstream that operates on top of the now-stable foundation. None of it should require re-touching the auto-scrape orchestrator's structure.
 

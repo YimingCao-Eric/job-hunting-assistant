@@ -1,6 +1,6 @@
-# JHA — Current workflow (as of 2026-05-07)
+# JHA — Current workflow (post-scrape account current as of 2026-07-16)
 
-> Single-page reference for how a JHA cycle works end-to-end, with explicit markers for **what's shipped**, **what's stubbed**, and **what's next**.
+> Single-page reference for how a JHA cycle works end-to-end, with explicit markers for **what's shipped** and **what lives outside this backend**.
 >
 > Read this first when:
 > - Picking up the project after a break
@@ -20,7 +20,7 @@
 4. [Stage 1 — Extension orchestrator (scrape phase)](#4-stage-1--extension-orchestrator-scrape-phase)
 5. [Stage 2 — Backend post-scrape orchestrator (post-scrape phase)](#5-stage-2--backend-post-scrape-orchestrator-post-scrape-phase)
 6. [What gets persisted after a healthy cycle](#6-what-gets-persisted-after-a-healthy-cycle)
-7. [What's deferred to future workstream](#7-whats-deferred-to-future-workstream)
+7. [What's next — and where it lives](#7-whats-next--and-where-it-lives)
 8. [Extension-side behavior post-cycle 455 fix](#8-extension-side-behavior-post-cycle-455-fix)
 
 ---
@@ -34,29 +34,28 @@
 │  ════════════                  ═════════════════                         │
 │                                                                          │
 │  Extension orchestrator        Phase 1: Auto-expiration         ✅ LIVE  │
-│  ✅ LIVE                       Phase 2: Matched-claim           ✅ LIVE  │
-│                                Phase 3: Build match_candidates  ⏳ NEXT  │
-│                                Phase 4: Dedup                   🔜 STUB  │
-│                                Phase 5: Matching pipeline       🔜 STUB  │
-│                                Phase 6: Compute match_results   🔜 STUB  │
+│  ✅ LIVE                       Finalize (no claim phase)        ✅ LIVE  │
 │                                                                          │
-│                                Phase 7: Auto-apply              📅 LATER │
+│                                — that is the whole post-scrape run —     │
+│                                                                          │
+│  Filtering / matching moved OUT of this backend entirely:                │
+│  a separate standalone service reads scraped_jobs and claims rows        │
+│  itself via `matched`.                                        📦 SEPARATE│
 │                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
 
-✅ LIVE     — production-ready, validated end-to-end (cycle 481, 2026-05-07)
-⏳ NEXT     — the next workstream to start
-🔜 STUB     — function exists in code but is a no-op placeholder
-📅 LATER    — designed in concept; not in the codebase yet
+✅ LIVE     — production-ready, validated end-to-end
+📦 SEPARATE — not this codebase; a standalone service (see §7)
 ```
 
-**Today (2026-05-07):**
+**Today:**
 
 - Scrape phase is fully working
-- Post-scrape Phases 1 and 2 just shipped this session and are validated
-- Phase 3 (build `match_candidates`) is the next workstream — this is where dedup and matching will consume the rows that Phase 2 claimed
-- Phases 4-6 exist as stubs in `post_scrape_orchestrator.py` (`_run_dedup_for_cycle`, `_run_matching_for_cycle`, `_compute_match_results`) — they currently return `None` / `{}` and don't do real work
-- Phase 7 (auto-apply) is a future product workstream
+- The post-scrape run is **one phase — auto-expiration — then finalize**. Nothing else.
+- **The matched-claim (formerly Phase 2) is retired** (feature 010). Rows are left `matched=FALSE` after a scrape so the standalone filtering/matching service can claim them itself. `auto_scrape/matching_claim.py` is deleted.
+- **Dedup and matching are not in this backend.** The `dedup/`, `matching/`, and `profile/` packages were deleted by the search-only split, along with the `_run_dedup_for_cycle` / `_run_matching_for_cycle` / `_compute_match_results` stubs that older revisions of this document described as "Phases 4-6". They do not exist. The `match_candidates` design ("Phase 3") was superseded by the canonical `scraped_jobs` table (feature 008).
+- That work now belongs to a **standalone service** (`filter-matching-service-design.md`), which consumes `scraped_jobs` and owns the `matched` claim.
+- Auto-apply remains a distant product idea, not in this codebase.
 
 ---
 
@@ -67,13 +66,15 @@ Terms used in this document, defined once here:
 | Term | Definition |
 |---|---|
 | **Per-source tables** | The three site-specific scrape tables: `linkedin_jobs`, `indeed_jobs`, `glassdoor_jobs`. Each one matches its site's natural field shape (51, 61, 69 columns respectively). Created in migration 025; replaces the legacy unified `scraped_jobs` table. |
-| **`match_candidates`** | The merged ephemeral table built from claimed per-source rows. **Future workstream** — does not exist yet. This is where Phase 3 will consolidate rows from all three per-source tables into a unified shape that the dedup and matching pipelines can operate on. |
+| **`match_candidates`** | **Abandoned design — does not exist and is not planned.** It was to be a merged table built from claimed per-source rows. Superseded by `scraped_jobs` (feature 008), which is now the canonical merged table written at ingest by atomic dual-write. Consumers read `scraped_jobs` directly; there is no build phase. |
+| **`scraped_jobs`** | The canonical, site-agnostic merged table — one row per posting, written in the same transaction as its per-source row (feature 008). This is the table downstream consumers read. |
 | **`scan_run_id`** | UUID FK to `extension_run_logs.id`. Every per-source row carries this; identifies which scrape produced it. |
-| **`matched`** | BOOLEAN column on per-source tables (added in migration 028). Default FALSE on insert; transitions to TRUE once per row when the post-scrape orchestrator's Phase 2 claims it. Never transitions back. |
+| **`matched`** | BOOLEAN column on the three per-source tables (migration 028) and on canonical `scraped_jobs` (migration 030). Default FALSE on insert. **Nothing in JHA flips it** — the post-scrape claim was retired (feature 010). It is reserved as the **processed-marker of the standalone filtering/matching service**, which claims rows itself with `WHERE matched = FALSE`, flipping the canonical row and its per-source origin together in one transaction so the two never disagree. |
 | **`shelf_life_days`** | Setting in `system_settings` (default 7). Per-source rows older than this get DELETEd by Phase 1 auto-expiration. |
 | **Cycle** | A single end-to-end run of the auto-scrape pipeline. Identified by `auto_scrape_cycles.cycle_id`. Goes through `scrape_running → scrape_complete → postscrape_running → post_scrape_complete`. |
 | **Run-log** | A row in `extension_run_logs`. Tracks one site/keyword scan within a cycle. A 3×3 cycle (3 sites × 3 keywords) produces 9 run-logs. |
-| **Claim** | Phase 2's atomic UPDATE that flips `matched=FALSE → TRUE` on all unmatched rows across all three per-source tables in one transaction. The "claim batch" is the set of rows returned by RETURNING. |
+| **Claim** | Flipping `matched=FALSE → TRUE` on a row to mark it taken for processing. **JHA no longer does this** — the post-scrape auto-claim was retired (feature 010). The term now refers to what the standalone filtering/matching service does when it picks up rows. Not to be confused with the *cycle* claim below. |
+| **Cycle claim** | The orchestrator's atomic `scrape_complete → postscrape_running` status transition, which stops two backend workers processing the same cycle. Unrelated to `matched`; still live. |
 | **Matrix** | The combinatorial set of [site, keyword] pairs the extension orchestrator iterates through within a cycle. |
 
 ---
@@ -114,89 +115,51 @@ Terms used in this document, defined once here:
 │  │                                                                  │        │
 │  │  await run_auto_expiration(db)                                  │        │
 │  │  → For each table in (linkedin_jobs, indeed_jobs, glassdoor_jobs│        │
-│  │     DELETE WHERE scrape_time + shelf_life_days < NOW()          │        │
+│  │     , scraped_jobs)                                              │        │
+│  │     DELETE WHERE scrape_time + shelf_life_days < NOW()           │        │
 │  │  → Returns {"deleted_per_table": {...}, "shelf_life_days": N}   │        │
 │  │  → Writes to cycle.cleanup_results immediately                  │        │
 │  └─────────────────────────────────────────────────────────────────┘        │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────┐        │
-│  │ Phase 2 — MATCHED-CLAIM                                ✅ LIVE  │        │
+│  │ FINALIZE — one write, no claim phase                   ✅ LIVE  │        │
 │  │                                                                  │        │
-│  │  await claim_unmatched_rows(db)                                 │        │
-│  │  → For each table in (linkedin_jobs, indeed_jobs, glassdoor_jobs│        │
-│  │     UPDATE SET matched=TRUE WHERE matched=FALSE RETURNING *     │        │
-│  │     (all three UPDATEs in one transaction)                      │        │
-│  │  → Returns {"linkedin": [rows], "indeed": [rows], "glassdoor":  │        │
-│  │             [rows]}                                              │        │
-│  │  → claim_summary = {site: count} held in memory                 │        │
-│  │  → claim_results (the actual rows) currently logged then        │        │
-│  │     discarded — Phase 3 will consume them when wired in         │        │
+│  │  await _update_cycle(                                            │        │
+│  │      cycle_id,                                                   │        │
+│  │      status="post_scrape_complete",                              │        │
+│  │      completed_at=now(),                                         │        │
+│  │      match_results={"claim_summary": None,                       │        │
+│  │                     "claim_retired": True},                      │        │
+│  │  )                                                               │        │
+│  │                                                                  │        │
+│  │  Rows scraped by this cycle are left matched=FALSE.              │        │
+│  │  Nothing in JHA claims them (feature 010).                       │        │
 │  └─────────────────────────────────────────────────────────────────┘        │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────┐        │
-│  │ Phase 3 — BUILD match_candidates                       ⏳ NEXT  │        │
-│  │                                                                  │        │
-│  │  Will take Phase 2's claim_results (the actual rows from all 3  │        │
-│  │  per-source tables) and merge them into a unified ephemeral     │        │
-│  │  table called match_candidates with a normalized schema:        │        │
-│  │  - canonical title, company, location, salary, JD text          │        │
-│  │  - back-references to source per-source row IDs                 │        │
-│  │  - all three sites' rows in one logical pool                    │        │
-│  │                                                                  │        │
-│  │  This is the "merge step" the per-source schema design          │        │
-│  │  always anticipated. Salary normalization (CC-10) and nested    │        │
-│  │  object flattening (CC-11) happen here.                         │        │
-│  │                                                                  │        │
-│  │  THIS DOES NOT EXIST YET. It's the next workstream.             │        │
-│  └─────────────────────────────────────────────────────────────────┘        │
+│  That is the entire post-scrape run: expire, then finalize.                  │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────┐        │
-│  │ Phase 4 — DEDUP                                        🔜 STUB  │        │
-│  │                                                                  │        │
-│  │  Currently: _run_dedup_for_cycle returns None                   │        │
-│  │  Future:                                                         │        │
-│  │   - hash_exact dedup on (title, company, location)              │        │
-│  │   - cosine TF-IDF dedup on JD text                              │        │
-│  │   - skip_reason / dedup_original_job_id written back to         │        │
-│  │     match_candidates                                             │        │
-│  └─────────────────────────────────────────────────────────────────┘        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  ↓
+              matched=FALSE rows wait here for a SEPARATE service
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STANDALONE FILTERING / MATCHING SERVICE            📦 SEPARATE PROJECT      │
+│ (not this codebase — see filter-matching-service-design.md)                  │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────┐        │
-│  │ Phase 5 — MATCHING PIPELINE                            🔜 STUB  │        │
-│  │                                                                  │        │
-│  │  Currently: _run_matching_for_cycle is a no-op                  │        │
-│  │  Future:                                                         │        │
-│  │   - CPU extraction (regex/keyword skill matching)               │        │
-│  │   - LLM extraction (gpt-4o-mini structured output)              │        │
-│  │   - CPU pre-scoring (gate non-viable rows cheaply)              │        │
-│  │   - LLM hiring-manager judgment (final score on gated rows)     │        │
-│  │   - Writes match_score, match_report to per-row                 │        │
-│  └─────────────────────────────────────────────────────────────────┘        │
+│  Reads canonical scraped_jobs, claims rows itself:                          │
+│    UPDATE ... SET matched=TRUE WHERE matched=FALSE                          │
+│    (canonical row + its per-source origin, one transaction)                  │
+│  Then filters and matches, writing its own tables.                          │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────┐        │
-│  │ Phase 6 — COMPUTE match_results                        🔜 STUB  │        │
-│  │                                                                  │        │
-│  │  Currently: _compute_match_results returns {}                   │        │
-│  │  Future: aggregate matching pipeline outputs into a JSONB       │        │
-│  │  with keys like:                                                │        │
-│  │   - matched_count, dedup_skipped, gate_failures,                │        │
-│  │   - llm_calls, llm_tokens, by_site stats                        │        │
-│  └─────────────────────────────────────────────────────────────────┘        │
-│                                                                              │
-│  Final write — single _update_cycle:                                        │
-│    match_results = {                                                        │
-│      "claim_summary": {linkedin: N, indeed: N, glassdoor: N},               │
-│      ... (Phase 6 will add more keys here)                                  │
-│    }                                                                        │
-│  cycle.status = 'post_scrape_complete'                                      │
-│                                                                              │
+│  Dedup and matching used to be described here as backend "Phases 3-6".      │
+│  Those packages and stubs were DELETED by the search-only split and the     │
+│  match_candidates design was superseded by scraped_jobs (feature 008).      │
 └─────────────────────────────────────────────────────────────────────────────┘
                                   ↓
                     Next cycle fires from alarm
                     (sleep 0ms after success;
                      longer if precheck failed or rate-limited)
 ```
-
 ---
 
 ## 4. Stage 1 — Extension orchestrator (scrape phase)
@@ -260,7 +223,9 @@ cycle done: status=scrape_complete, scans_succeeded=9, scans_failed=0
 
 ## 5. Stage 2 — Backend post-scrape orchestrator (post-scrape phase)
 
-**Status:** Phases 1 and 2 ✅ LIVE; Phases 3-6 not yet implemented or stubbed.
+**Status:** one phase — auto-expiration ✅ LIVE — then finalize. That is the whole post-scrape run.
+
+There is no Phase 2 and no Phases 3-6. The matched-claim (Phase 2) was **retired by feature 010**; the dedup/matching/`match_candidates` work that used to be described here as "Phases 3-6" was **deleted by the search-only split** and is not coming back to this orchestrator — it belongs to a separate, standalone filtering/matching service (§7).
 
 ### What runs
 
@@ -269,6 +234,15 @@ cycle done: status=scrape_complete, scans_succeeded=9, scans_failed=0
 Triggered by Redis publish from the extension orchestrator when `scrape_complete` is set.
 
 Atomically transitions `cycle.status: scrape_complete → postscrape_running` to claim the cycle for processing (this prevents two backend workers from processing the same cycle).
+
+**The whole flow:**
+
+```text
+claim the cycle ──▶ Phase 1: auto-expiration ──▶ finalize
+                          │                          │
+                    write cleanup_results     write status + completed_at + match_results
+                                              (2 cycle writes total)
+```
 
 ### Phase 1 — Auto-expiration ✅ LIVE
 
@@ -291,119 +265,51 @@ await _update_cycle(cycle_id, cleanup_results=expiration_results)
 
 **Output written immediately:** `cycle.cleanup_results`
 
-### Phase 2 — Matched-claim ✅ LIVE
+### Finalize — no claim phase
 
 ```python
-async with AsyncSessionLocal() as db:
-    claim_results = await claim_unmatched_rows(db)
-    await db.commit()
-
-# claim_unmatched_rows internals:
-# - For each table in (linkedin_jobs, indeed_jobs, glassdoor_jobs):
-#     UPDATE {table} SET matched=TRUE
-#     WHERE matched=FALSE
-#     RETURNING <relevant columns>
-# - All three UPDATEs in one transaction
-# - Return {"linkedin": [rows], "indeed": [rows], "glassdoor": [rows]}
-
-claim_summary = {site: len(rows) for site, rows in claim_results.items()}
-# claim_summary held in memory; written at end of cycle alongside Phase 6 output
-```
-
-**Effect:** every per-source row that was `matched=FALSE` is now `matched=TRUE`. The returned `claim_results` (the actual rows) is the input that Phase 3 will eventually consume.
-
-**Why atomic across three tables:** if linkedin's UPDATE succeeds but indeed's fails, we'd have linkedin rows flagged with no downstream processing. Transaction wrap rolls back all three together.
-
-**Why flag BEFORE Phase 3-6 work:** if matching crashes mid-flight, rows leave behind a "claimed but not actually matched" state. Recovery is manual but contained. Documented as Known Limitation §15.2.
-
-**Currently:** `claim_results` (the rows themselves) is logged and discarded. Only `claim_summary` (the counts) is preserved for `cycle.match_results`.
-
-**When Phase 3 wires in:** `claim_results` will become the input to building `match_candidates`.
-
-### Phase 3 — Build `match_candidates` ⏳ NEXT WORKSTREAM
-
-**This phase does not exist in code yet.** This is where today's "next steps" begin.
-
-**Concept:**
-
-```python
-# Future shape:
-async with AsyncSessionLocal() as db:
-    match_candidates = await build_match_candidates(db, claim_results)
-    # Inserts into a match_candidates table (or in-memory) with a unified schema:
-    #   match_candidate_id UUID
-    #   source_table VARCHAR     -- 'linkedin_jobs' | 'indeed_jobs' | 'glassdoor_jobs'
-    #   source_row_id UUID       -- back-reference to the per-source row
-    #   scan_run_id UUID         -- inherited from per-source row
-    #   canonical_title TEXT
-    #   canonical_company TEXT
-    #   canonical_location TEXT
-    #   normalized_salary_min/max/currency/period   -- normalized per CC-10
-    #   jd_text TEXT             -- best-available description
-    #   ... (TBD)
-```
-
-**Open design questions:**
-
-- Is `match_candidates` a real durable table or an in-memory ephemeral build per cycle?
-- How does deduplication across the three sites work? (LinkedIn job + Indeed job for same posting)
-- How is salary normalization handled when sites use different vocab (`YEARLY` vs `YEAR` vs `ANNUAL`)?
-- Where does the canonical title/company come from when multiple sources disagree?
-- What's the merge contract when `header.applyUrl` (Glassdoor) is unresolved RSC ref?
-
-These questions are the substantive design work for the next workstream.
-
-### Phase 4 — Dedup 🔜 STUB
-
-```python
-# Currently:
-async def _run_dedup_for_cycle(cycle_id) -> Optional[UUID]:
-    # stub returns None
-    return None
-```
-
-**Future:** consume `match_candidates`, run hash_exact then cosine TF-IDF, write `skip_reason` and `dedup_original_job_id` to flag duplicates. Returns `dedup_task_id` UUID for tracking.
-
-### Phase 5 — Matching pipeline 🔜 STUB
-
-```python
-# Currently:
-async def _run_matching_for_cycle(cycle_id, llm_enabled, has_openai_key) -> None:
-    # stub: logs and returns
-    return
-```
-
-**Future:** for each non-deduped `match_candidate`:
-1. CPU extraction (regex/keyword) extracts skills from JD text
-2. LLM extraction (gpt-4o-mini structured output) extracts skills, requirements, must-haves from JD
-3. CPU pre-scoring gates rows that obviously don't match resume (cheap path)
-4. LLM hiring-manager judgment scores remaining rows (expensive path)
-5. Writes `match_score`, `match_report_id` per row
-
-### Phase 6 — Compute `match_results` 🔜 STUB
-
-```python
-# Currently:
-async def _compute_match_results(post_scrape_started_at) -> dict:
-    return {}  # empty stub
-```
-
-**Future:** aggregate matching pipeline outputs into a JSONB with keys like `matched_count`, `dedup_skipped`, `gate_failures`, `llm_calls`, `llm_tokens`, `by_site` stats. These get merged with `claim_summary` (from Phase 2) in the single final `_update_cycle(match_results=...)` write.
-
-### Final write
-
-```python
-await _update_cycle(cycle_id, match_results={
-    "claim_summary": claim_summary,
-    **match_results,   # currently {}; will gain Phase 6 keys
-})
-
+# Feature 010 retired the matched-claim that used to run here.
 await _update_cycle(
     cycle_id,
     status="post_scrape_complete",
     completed_at=datetime.now(timezone.utc),
+    match_results={"claim_summary": None, "claim_retired": True},
 )
 ```
+
+**Effect:** the cycle is done. Rows scraped by this cycle are left **`matched=FALSE`**.
+
+**Output written:** `cycle.status`, `cycle.completed_at`, `cycle.match_results` — one write, folded together.
+
+### Why there is no claim phase (feature 010)
+
+Until feature 010 a Phase 2 ran here (`claim_unmatched_rows` in `auto_scrape/matching_claim.py`, now deleted). It flipped `matched=FALSE → TRUE` on every unclaimed row in all three per-source tables and on their canonical `scraped_jobs` twins, and recorded per-site counts as `match_results.claim_summary`.
+
+It was built to hand rows to the dedup/matching pipelines. **Those were deleted by the search-only split**, so the claim had no consumer: `matched` was written on every row and read by nothing.
+
+Worse, it was actively harmful. The planned standalone filtering/matching service claims rows itself with `WHERE matched = FALSE`. Because Phase 2 pre-claimed everything at the end of every cycle, that service would have found **zero** rows. Retiring the claim was its one hard blocker.
+
+**Now:** `matched` stays `FALSE` after a scrape. Nothing in JHA claims rows; the downstream service owns the claim. The column stays on all four tables — it is that service's processed-marker, not dead weight.
+
+**Retired for free:** the old crash window is gone. Phase 2 committed `matched=TRUE` in one transaction and its `claim_summary` in a separate one; a crash between them left rows permanently claimed with no record, and because the claim filtered `WHERE matched = FALSE` they could never be re-claimed (recovery was manual). Nothing flips them now, so the window cannot occur.
+
+### `match_results` — three shapes a reader must handle
+
+| Shape | Produced by | Meaning |
+|---|---|---|
+| `{"claim_summary": {"linkedin": N, ...}}` | cycles completed **before** feature 010 | historical record — real counts, never rewritten |
+| `{"claim_summary": null, "claim_retired": true}` | cycles completed **since** | the run completed and performed no automatic claim |
+| `null` | cycles that **failed** before finalizing | no claim indication |
+
+`claim_summary` is **retained as an explicit `null`** — "no counts were produced". It must never be read as zeroed counts, which would mean "the phase ran and claimed nothing". Readers check `claim_summary` for a truthy value **first**, then `claim_retired`: reversing that order renders historical cycles as "claim retired", a false statement about cycles that really did claim rows.
+
+The marker is written **only** in the finalize call, so a cycle that fails before finalizing records no claim indication while its `cleanup_results` survive independently.
+
+### Dedup, matching, and `match_candidates` — not here
+
+Earlier revisions of this document described Phases 3-6 (`build_match_candidates`, `_run_dedup_for_cycle`, `_run_matching_for_cycle`, `_compute_match_results`) as the next workstream or as stubs. **None of those functions exist** — the `dedup/`, `matching/`, and `profile/` packages were deleted by the search-only split, and the `match_candidates` design was superseded by the canonical `scraped_jobs` table (feature 008).
+
+That work now belongs to a **separate standalone service** that reads `scraped_jobs`, claims rows via `matched`, and writes its own tables. See `filter-matching-service-design.md`. The backend orchestrator is search-only and ends at finalize.
 
 ---
 
@@ -413,9 +319,12 @@ After a cycle reaches `post_scrape_complete`, the database state is:
 
 ### Per-source tables
 
-- New rows from this cycle's scans are present with `matched=TRUE` (claimed by Phase 2)
-- Older rows (>7 days by default) deleted by Phase 1
+- New rows from this cycle's scans are present with **`matched=FALSE`** — the post-scrape run does not claim them (feature 010). They are the standalone filtering/matching service's work queue.
+- Older rows (>7 days by default) deleted by Phase 1 — from the three per-source tables **and** canonical `scraped_jobs`, so a canonical row never outlives the per-source row it derives from.
 - All rows carry `scan_run_id` pointing to their respective run-log
+- Each per-source row has a canonical `scraped_jobs` twin written in the same transaction at ingest, and the two always agree about `matched`.
+
+> **Note on the pre-010 backlog:** rows ingested *before* the claim was retired are `matched=TRUE`, claimed by the old Phase 2. They were not back-filled to FALSE. Only rows scraped after the retirement are guaranteed unclaimed. When checking that the retirement works, scope the query to a fresh scan's `scan_run_id` — a global `SELECT matched, count(*) ... GROUP BY matched` will show plenty of `t` from the backlog and look like failure.
 
 ### `auto_scrape_cycles` row
 
@@ -437,16 +346,13 @@ After a cycle reaches `post_scrape_complete`, the database state is:
     }
   },
   "match_results": {
-    "claim_summary": {
-      "linkedin": 952,
-      "indeed": 197,
-      "glassdoor": 157
-    }
+    "claim_summary": null,
+    "claim_retired": true
   }
 }
 ```
 
-When Phase 3-6 wire in, `match_results` will gain additional keys (still has `claim_summary` plus more).
+`claim_summary: null` means **"no claim counts were produced"** — the phase is retired. It does not mean "claimed zero". Cycles completed **before** feature 010 still carry their real counts (e.g. `{"claim_summary": {"linkedin": 952, "indeed": 197, "glassdoor": 157}}`) and are never rewritten; readers must handle both shapes, checking `claim_summary` for a truthy value first. A cycle that **failed** before finalizing has `match_results: null` and no claim indication at all.
 
 ### `extension_run_logs`
 
@@ -454,31 +360,26 @@ When Phase 3-6 wire in, `match_results` will gain additional keys (still has `cl
 
 ---
 
-## 7. What's deferred to future workstream
+## 7. What's next — and where it lives
 
-In priority order:
+**Not in this backend.** The backend is search-only: scrape, ingest, expire, serve. Everything below either moved out or was superseded.
 
-| Item | Phase | Notes |
+| Item | Where it lives now | Status |
 |---|---|---|
-| **Build `match_candidates`** | Phase 3 | The next workstream. Depends on design pass for cumulative-vs-per-cycle dedup, salary normalization vocab, canonical field selection. |
-| **Wire dedup pipeline** | Phase 4 | Once `match_candidates` exists, hash_exact + cosine TF-IDF dedup operates on it. |
-| **Wire matching pipeline** | Phase 5 | Once dedup leaves filtered rows, CPU + LLM matching runs on them. |
-| **Wire `_compute_match_results`** | Phase 6 | Once matching produces scored rows, aggregate stats. Phase 4c smoke test is forward-compatible for added keys. |
-| **Auto-apply** | Phase 7 | Distant. Requires both dedup and matching functional. |
-| **Frontend UI for shelf_life_days** | UI | Backend supports it via `system_settings`; frontend reads/writes via API. |
-| **Retire legacy `scraped_jobs`** | Cleanup | After Phases 4-6 wire into the per-source path, the old unified table can be dropped. |
+| **Filtering / dedup** | Standalone service (`filter-matching-service-design.md`) | 🆕 To build. Reads canonical `scraped_jobs`; claims rows via `matched`. The old backend `dedup/` package was **deleted** by the search-only split — recoverable from git history if the service wants to port it. |
+| **Matching (CPU + LLM)** | Same standalone service | 🆕 To build. The old `matching/` package was **deleted**; same recovery route. |
+| **`match_candidates`** | — | ❌ **Abandoned.** Superseded by canonical `scraped_jobs` (feature 008). There is no build phase; consumers read `scraped_jobs` directly. |
+| **Profile input** | JHA frontend + a JHA-owned `profile` table | 🆕 To build (prerequisite **JHA-C**). The service reads the active profile. |
+| **Auto-apply** | — | 📅 Distant product idea. Requires filtering and matching to exist first. |
+| **Frontend UI for `shelf_life_days`** | JHA frontend | 🔧 Backend already supports it via `system_settings`; the UI does not read/write it yet. |
 
-### Recommended sequencing for Phase 3
+### Prerequisites for the standalone service
 
-The matched mechanism plan went through 6 rounds of conflict scans before converging — too many. Goal for Phase 3 is to reduce that to 1-2 rounds. Recommended approach:
+Tracked in `jha-prereq-cmds.md`:
 
-1. Read existing `backend/matching/pipeline.py` and dedup code in their entirety
-2. Copy relevant function signatures into the plan doc with `# UNCHANGED` markers
-3. Annotate with `# NEW` markers where the new code goes
-4. Do ONE conflict scan pass to catch baseline issues
-5. Implement with same TARGETED INSERTION discipline as Step 7 of the matched mechanism
-
----
+- **JHA-A** — extend the canonical `scraped_jobs` projection with the filter columns. ✅ **Shipped** (feature 009, migration 031).
+- **JHA-B** — retire the vestigial post-scrape matched-claim so `matched` stays `FALSE`. ✅ **Shipped** (feature 010). This was the one hard blocker: until it landed, the service's `WHERE matched = FALSE` claim would have found zero rows after any cycle.
+- **JHA-C** — profile input page on the frontend. 🆕 Still needed.
 
 ## 8. Extension-side behavior post-cycle 455 fix
 

@@ -1,11 +1,26 @@
-"""Smoke test: matched claim-and-flag mechanism.
+"""Smoke test: the matched flag after the post-scrape claim was retired.
+
+This file's purpose changed with feature 010. It used to assert that the
+post-scrape run claims rows. The auto-claim is retired, so it now asserts the
+inverse -- nothing claims automatically -- plus the flag invariants that the
+retirement did NOT touch. The behavior change is named in spec 010 FR-011; these
+edits are its deliberate consequence, not a test bent until it passed.
 
 Verifies:
-  - claim flips matched=false → true
-  - claim returns the rows
-  - the SQL pattern is idempotent (verified scoped to test rows, not globally)
-  - all three tables claimed in one transaction (manual fault-injection — SKIP'd here)
-  - the claim also reaches the canonical scraped_jobs twin, so the two never disagree
+  - a post-scrape run leaves rows UNCLAIMED (FR-001/FR-002, SC-001) -- the point
+    of the feature: a downstream service claims them itself
+  - a completed cycle records {"claim_summary": None, "claim_retired": True}
+    (FR-007) -- claim_summary is retained-and-None ("no counts"), never zeroed
+  - an external claimer keeps the canonical row and its per-source origin in
+    agreement (FR-011a, SC-008) -- unaffected by the retirement, must not be lost
+  - the one-way claim pattern is idempotent (FR-004a) -- the contract a
+    downstream claimer codes against
+  - the flag's storage contract is intact on every per-source table (FR-003)
+
+NOT asserted, deliberately: that a claim is irreversible. This system never
+claims and never un-claims; whether an external claimer may reset the flag for
+blacklist re-entry is out of scope (FR-004c) and owned by the downstream
+service's RE-ENTRY-WRITE question. Do not add an assertion that forecloses it.
 """
 
 from __future__ import annotations
@@ -16,7 +31,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import text
 
-from auto_scrape.matching_claim import claim_unmatched_rows
+from auto_scrape.post_scrape_orchestrator import run_post_scrape_phase
 from core.database import AsyncSessionLocal
 
 
@@ -78,8 +93,16 @@ async def _setup_test_row(db, table: str, scan_run_id: UUID) -> UUID:
     return result.scalar_one()
 
 
-async def test_basic_claim() -> None:
-    """Claim flips matched=false → true and returns the rows."""
+async def test_post_scrape_leaves_rows_unclaimed() -> None:
+    """A post-scrape run does NOT claim rows: matched stays FALSE (FR-001, SC-001).
+
+    This is the feature's central proof. Before feature 010 the run flipped every
+    unclaimed row to TRUE, so a downstream filtering/matching service claiming with
+    `WHERE matched = FALSE` found nothing after any cycle. Now the rows survive the
+    cycle unclaimed and the service has a work queue.
+
+    Runs the real orchestrator end to end -- nothing exercised it before.
+    """
     async with AsyncSessionLocal() as db:
         await _verify_required_columns(db)
         run_id = (
@@ -88,7 +111,8 @@ async def test_basic_claim() -> None:
         await db.commit()
         if run_id is None:
             print(
-                "[SKIP] basic_claim: no extension_run_logs rows; need one for FK",
+                "[SKIP] post_scrape_unclaimed: no extension_run_logs rows; "
+                "need one for FK",
                 file=sys.stderr,
             )
             return
@@ -101,27 +125,90 @@ async def test_basic_claim() -> None:
             ("glassdoor", "glassdoor_jobs"),
         ]:
             ids[site] = await _setup_test_row(db, table, run_id)
+        # The canonical twins ingest would have written alongside them.
+        for site, table in [
+            ("linkedin", "linkedin_jobs"),
+            ("indeed", "indeed_jobs"),
+            ("glassdoor", "glassdoor_jobs"),
+        ]:
+            await db.execute(
+                text(f"""
+                    INSERT INTO scraped_jobs
+                        (source_site, source_row_id, scan_run_id, job_url,
+                         scrape_time, matched, title)
+                    SELECT '{site}', id, scan_run_id, job_url, scrape_time, FALSE,
+                           'Retired Claim Fixture'
+                      FROM {table} WHERE id = :id
+                """),
+                {"id": ids[site]},
+            )
         await db.commit()
 
+    # A cycle the orchestrator will finalize. cycle_id is the human-facing NUMBER
+    # and is NOT NULL; production draws it from this sequence (routers/auto_scrape.py
+    # create_cycle), so the fixture does the same rather than inventing a value.
     async with AsyncSessionLocal() as db:
-        claimed = await claim_unmatched_rows(db)
+        cycle_pk = (
+            await db.execute(
+                text("""
+                    INSERT INTO auto_scrape_cycles
+                        (id, cycle_id, status, started_at, phase_heartbeat_at)
+                    VALUES (gen_random_uuid(),
+                            nextval('auto_scrape_cycle_id_seq'),
+                            'postscrape_running', NOW(), NOW())
+                    RETURNING id
+                """)
+            )
+        ).scalar_one()
         await db.commit()
 
-    for site in ("linkedin", "indeed", "glassdoor"):
-        claimed_ids = {r["id"] for r in claimed[site]}
-        assert ids[site] in claimed_ids, f"{site}: claim missed our test row"
+    await run_post_scrape_phase(cycle_pk)
 
+    # The rows must have survived the cycle unclaimed -- per-source AND canonical.
     async with AsyncSessionLocal() as db:
         for site, table in [
             ("linkedin", "linkedin_jobs"),
             ("indeed", "indeed_jobs"),
             ("glassdoor", "glassdoor_jobs"),
         ]:
-            result = await db.execute(
-                text(f"SELECT matched FROM {table} WHERE id = :id"),
-                {"id": ids[site]},
+            source_matched = (
+                await db.execute(
+                    text(f"SELECT matched FROM {table} WHERE id = :id"),
+                    {"id": ids[site]},
+                )
+            ).scalar()
+            assert source_matched is False, (
+                f"{site}: post-scrape claimed the row; matched should still be FALSE "
+                "-- the auto-claim is retired and the downstream service owns the claim"
             )
-            assert result.scalar() is True, f"{site}: matched should be TRUE"
+            canonical_matched = (
+                await db.execute(
+                    text(
+                        "SELECT matched FROM scraped_jobs WHERE source_row_id = :id"
+                    ),
+                    {"id": ids[site]},
+                )
+            ).scalar()
+            assert canonical_matched is False, (
+                f"{site}: post-scrape claimed the canonical row; should still be FALSE"
+            )
+
+        # FR-007: the cycle reports a retired claim, never counts (not even zeroed).
+        status, match_results = (
+            await db.execute(
+                text(
+                    "SELECT status, match_results FROM auto_scrape_cycles "
+                    "WHERE id = :id"
+                ),
+                {"id": cycle_pk},
+            )
+        ).one()
+        assert status == "post_scrape_complete", (
+            f"cycle should have finalized, got status={status!r}"
+        )
+        assert match_results == {"claim_summary": None, "claim_retired": True}, (
+            f"cycle should report a retired claim, got {match_results!r}"
+        )
         await db.commit()
 
     async with AsyncSessionLocal() as db:
@@ -131,19 +218,33 @@ async def test_basic_claim() -> None:
             ("glassdoor", "glassdoor_jobs"),
         ]:
             await db.execute(
-                text(f"DELETE FROM {table} WHERE id = :id"),
+                text("DELETE FROM scraped_jobs WHERE source_row_id = :id"),
                 {"id": ids[site]},
             )
+            await db.execute(
+                text(f"DELETE FROM {table} WHERE id = :id"), {"id": ids[site]}
+            )
+        await db.execute(
+            text("DELETE FROM auto_scrape_cycles WHERE id = :id"), {"id": cycle_pk}
+        )
         await db.commit()
 
-    print("[OK] basic claim and flag")
+    print("[OK] post-scrape leaves rows unclaimed; cycle reports claim retired")
 
 
-async def test_claim_reaches_canonical_row() -> None:
-    """FR-028: claiming a per-source row records the claim on its canonical twin.
+async def test_external_claimer_keeps_rows_in_agreement() -> None:
+    """A claimer flipping both sides in one transaction keeps them in agreement.
 
-    Without this, the canonical `matched` is permanently wrong: it is copied at ingest,
-    when it is always false, and nothing else would ever set it true.
+    Retained from before feature 010 (FR-011a): the canonical/per-source agreement
+    invariant (spec 008 FR-028, SC-008) is untouched by retiring the auto-claim and
+    must not be lost with it.
+
+    What changed is the actor. The claim used to be performed here by JHA; now
+    nothing in JHA claims, so this simulates the EXTERNAL claimer the flag is
+    reserved for, and pins the contract it must honour (FR-004a): flip the canonical
+    row and its per-source origin together, in a single transaction, so the two never
+    disagree. That obligation is not new -- it is the existing agreement invariant
+    plus the existing atomic-multi-table-write rule.
     """
     async with AsyncSessionLocal() as db:
         run_id = (
@@ -176,9 +277,25 @@ async def test_claim_reaches_canonical_row() -> None:
         )
         await db.commit()
 
+    # The external claimer: both sides, one transaction, scoped to its own rows.
+    # Scoped -- unlike the retired blanket claim, which flipped every unclaimed row
+    # in the database and made this test mutate the whole corpus as a side effect.
     async with AsyncSessionLocal() as db:
-        await claim_unmatched_rows(db)
-        await db.commit()
+        async with db.begin():
+            await db.execute(
+                text(
+                    "UPDATE linkedin_jobs SET matched = TRUE "
+                    "WHERE matched = FALSE AND id = :id"
+                ),
+                {"id": source_id},
+            )
+            await db.execute(
+                text(
+                    "UPDATE scraped_jobs SET matched = TRUE "
+                    "WHERE matched = FALSE AND source_row_id = :id"
+                ),
+                {"id": source_id},
+            )
 
     async with AsyncSessionLocal() as db:
         canonical_matched = (
@@ -191,7 +308,8 @@ async def test_claim_reaches_canonical_row() -> None:
             "canonical row still reports unclaimed after its per-source row was claimed"
         )
 
-        # SC-010: the pair must never disagree about being claimed.
+        # The pair must never disagree about being claimed (spec 008 SC-010,
+        # carried forward as spec 010 SC-008).
         disagreements = (
             await db.execute(
                 text("""
@@ -215,7 +333,10 @@ async def test_claim_reaches_canonical_row() -> None:
         )
         await db.commit()
 
-    print("[OK] claim reaches the canonical row; no matched disagreement (SC-010)")
+    print(
+        "[OK] external claimer reaches the canonical row; "
+        "no matched disagreement (SC-008)"
+    )
 
 
 async def test_idempotent_claim_scoped() -> None:
@@ -291,17 +412,11 @@ async def test_idempotent_claim_scoped() -> None:
     print("[OK] idempotence verified (scoped UPDATE-RETURNING pattern)")
 
 
-async def test_atomic_three_table_claim() -> None:
-    """Manual fault injection — documented SKIP."""
-    print("[SKIP] atomic three-table claim — requires manual fault injection test")
-
-
 async def main() -> None:
-    await test_basic_claim()
-    await test_claim_reaches_canonical_row()
+    await test_post_scrape_leaves_rows_unclaimed()
+    await test_external_claimer_keeps_rows_in_agreement()
     await test_idempotent_claim_scoped()
-    await test_atomic_three_table_claim()
-    print("[OK] all matched-claim smoke tests complete")
+    print("[OK] all matched-flag smoke tests complete")
 
 
 if __name__ == "__main__":

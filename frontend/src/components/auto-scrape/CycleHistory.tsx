@@ -98,13 +98,28 @@ export function CycleHistory({ cycles }: CycleHistoryProps) {
             </div>
           )
         }
-        const claims = c.match_results?.claim_summary as Record<string, number> | undefined
-        const claimed = claims ? Object.values(claims).reduce((a, b) => a + b, 0) : null
-        return (
-          <span className="text-text-secondary">
-            {claimed !== null ? `${claimed} claimed` : c.notes ? c.notes : '—'}
-          </span>
-        )
+        // Three shapes to serve (spec 010, contracts/cycle-output.md):
+        //   {claim_summary: {...}}                     cycles from before the post-scrape
+        //                                              claim was retired -- real counts,
+        //                                              never rewritten (FR-008)
+        //   {claim_summary: null, claim_retired: true} cycles since (FR-007). claim_summary
+        //                                              is RETAINED as null -- "no counts
+        //                                              produced", not "claimed zero".
+        //   null                                       cycle failed before finalizing
+        //
+        // Counts FIRST. null is falsy so new cycles fall through correctly, but reversing
+        // this order renders historical cycles as "claim retired" -- a false statement
+        // about cycles that really did claim rows.
+        const mr = c.match_results
+        const claims = mr?.claim_summary as Record<string, number> | null | undefined
+        if (claims) {
+          const claimed = Object.values(claims).reduce((a, b) => a + b, 0)
+          return <span className="text-text-secondary">{claimed} claimed</span>
+        }
+        if (mr?.claim_retired === true) {
+          return <span className="text-text-secondary">claim retired</span>
+        }
+        return <span className="text-text-secondary">{c.notes ? c.notes : '—'}</span>
       },
     },
   ]

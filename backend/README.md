@@ -47,12 +47,12 @@ backend/
 │   ├── admin_cleanup.py **`POST /admin/cleanup-invalid-entries`** — bearer auth; trims bad scraped rows / stale logs (see router)
 │   ├── run_log_ws.py    **`WebSocket /ws/run-log`** — fan-out run-log updates (`bearer` subprotocol auth)
 │   └── dedup.py         GET dedup reports; POST /dedup/reports/{id}/debug; POST /jobs/dedup, /reset, /resolve-chains
-├── auto_scrape/         **`post_scrape_orchestrator`** — optional Redis subscriber + post-scrape cycle claims (extension also uses **APScheduler** in `main.py` when configured)
+├── auto_scrape/         **`post_scrape_orchestrator`** (Redis subscriber + cycle claim; runs auto-expiration then finalizes — no matched-claim phase since feature 010) and **`auto_expiration`**
 ├── alembic.ini
 ├── requirements.txt
 ├── Dockerfile
 ├── smoke_test_auto_scrape.py   HTTP + DB smoke (auto-scrape, orchestrator — run against live API)
-├── smoke_test_matched_claim.py
+├── smoke_test_matched_claim.py   asserts the post-scrape run leaves rows unclaimed (the auto-claim was retired — feature 010) + the flag's surviving invariants
 ├── smoke_test_auto_expiration.py
 └── scripts/             helpers (e.g. **`verify_matched_column.py`** after migration **028**)
 ```

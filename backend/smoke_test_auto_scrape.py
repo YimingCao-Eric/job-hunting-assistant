@@ -629,29 +629,30 @@ async def main() -> None:
             elif not isinstance(c0["match_results"], dict):
                 fail("Phase 4c match_results not a dict")
             else:
+                # Feature 010 retired the post-scrape matched-claim. A completed
+                # cycle now reports that the phase is retired instead of per-site
+                # counts. Named in spec 010 FR-011: this assertion pinned behavior
+                # that was deliberately removed, so it asserts the new contract.
+                # claim_summary is RETAINED as an explicit None -- "no counts were
+                # produced" -- which must never be conflated with zeroed counts
+                # meaning "the phase ran and claimed nothing". Cycles completed
+                # before the retirement keep their real counts (FR-008).
                 mr = c0["match_results"] or {}
                 if "claim_summary" not in mr:
                     fail(
-                        "Phase 4c match_results missing claim_summary "
-                        f"(got keys {sorted(mr.keys())})"
+                        "Phase 4c match_results dropped claim_summary; it must be "
+                        f"retained as null (got keys {sorted(mr.keys())})"
                     )
-                else:
-                    cs = mr["claim_summary"]
-                    if not isinstance(cs, dict):
-                        fail(
-                            f"Phase 4c claim_summary should be dict, "
-                            f"got {type(cs).__name__}"
-                        )
-                    elif set(cs.keys()) != {"linkedin", "indeed", "glassdoor"}:
-                        fail(
-                            "Phase 4c claim_summary missing site keys: "
-                            f"{sorted(cs.keys())}"
-                        )
-                    else:
-                        for site, count in cs.items():
-                            if not isinstance(count, int) or count < 0:
-                                fail(f"Phase 4c {site} claim count is {count!r}")
-                                break
+                elif mr["claim_summary"] is not None:
+                    fail(
+                        "Phase 4c claim_summary should be null (no counts produced) "
+                        f"now the claim is retired, got {mr['claim_summary']!r}"
+                    )
+                elif mr.get("claim_retired") is not True:
+                    fail(
+                        "Phase 4c match_results missing claim_retired=true "
+                        f"(got {mr!r})"
+                    )
 
                 if not FAILED:
                     cr = c0.get("cleanup_results") or {}

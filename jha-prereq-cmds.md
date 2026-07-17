@@ -1,15 +1,22 @@
 # JHA prerequisite changes — Claude Code + Spec Kit commands
 
-Two small features must land in **this repo (JHA)** before the standalone filtering/matching
-service (`filter-matching-service-design.md`) is built:
+Two small features had to land in **this repo (JHA)** before the standalone filtering/matching
+service (`filter-matching-service-design.md`) could be built. **Both are now shipped:**
 
 - **JHA-A** — Extend the canonical `scraped_jobs` projection (add the columns the matcher needs).
+  ✅ **SHIPPED** — feature 009, Alembic **031**.
 - **JHA-B** — Retire the vestigial post-scrape matched-claim (so `matched` stays `FALSE` until the
-  matcher claims it).
+  matcher claims it). ✅ **SHIPPED** — feature 010. The auto-claim is gone from
+  `run_post_scrape_phase`, `auto_scrape/matching_claim.py` is deleted, and the constitution's
+  module-layout note was corrected (PATCH, 1.1.0 → 1.1.1).
 
-They're **independent** (different files), so order doesn't strictly matter; do A then B. Both are
-small, surgical, spec-first changes. Run each through the full SDD loop. Base everything on `main`
-(which has feature 008); Spec Kit is already initialized here.
+A third prerequisite emerged from the frontend-source decision and is **still needed**:
+
+- **JHA-C** — Profile input page on the frontend (+ a JHA-owned `profile` table). 🆕 No playbook
+  written yet.
+
+The command sequences below are **retained as worked examples** of the full SDD loop, not as
+to-dos. Base everything on `main`; Spec Kit is already initialized here.
 
 > Reminder for every phase: this is a **backend change** — respect the constitution (new Alembic
 > migration per schema change, atomic dual-write, snake_case, no speculative indexes, smoke tests
@@ -89,6 +96,19 @@ git push origin main
 ---
 
 ## Feature JHA-B — Retire the vestigial post-scrape matched-claim
+
+> ✅ **SHIPPED — feature 010** (`specs/010-retire-matched-autoclaim/`). Retained below as a worked
+> example of the SDD loop; do not re-run. **What actually shipped differed from the plan sketched
+> here in two ways worth knowing:**
+>
+> 1. **The clarify step resolved to a hybrid**, not either option this playbook offered:
+>    `matching_claim.py` was **deleted**, and `smoke_test_matched_claim.py` was **kept** under its
+>    own filename, repurposed to assert the inverse (rows stay unclaimed) while retaining its
+>    canonical/per-source agreement and column-contract checks. Keeping the filename is why
+>    Principle II needed no amendment — it pins tests by filename.
+> 2. **The constitutional amendment was one line, PATCH — not four sites and MAJOR.** Principle V's
+>    permitted-mutation clauses name no performer, so a permitted-but-unperformed mutation
+>    satisfies them unchanged. Only the module-layout parenthetical was falsified.
 
 Stops the post-scrape orchestrator auto-flipping `matched` (its consumer, matching, is gone), so
 the future service owns the claim.

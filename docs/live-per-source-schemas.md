@@ -237,7 +237,7 @@ by **dual-write at ingest**: each `POST /jobs/ingest` writes its per-source tabl
 | `scan_run_id` | uuid FK | `scan_run_id` | `scan_run_id` | `scan_run_id` | copy (FK → extension_run_logs) |
 | `job_url` | varchar(2048) | `job_url` | `job_url` | `job_url` | copy; UNIQUE |
 | `scrape_time` | timestamptz | `scrape_time` | `scrape_time` | `scrape_time` | copy |
-| `matched` | boolean | `matched` | `matched` | `matched` | copied `false` at ingest; on claim, **both the per-source row and this unified row are flipped together** (spec 008 FR-028 — decision Q1=A) |
+| `matched` | boolean | `matched` | `matched` | `matched` | copied `false` at ingest and **stays false** — JHA's post-scrape auto-claim was retired (spec 010). Reserved for the standalone filtering/matching service, which claims rows itself; when it does, **both the per-source row and this unified row must be flipped together** in one transaction (spec 008 FR-028 — decision Q1=A) |
 
 ### Core business fields (what the Jobs page shows)
 
@@ -410,17 +410,22 @@ exists. Either is one migration away if measurement justifies it.
 - **[as-built] `source_row_id` has no foreign key, and cannot.** It is polymorphic — it points
   at `linkedin_jobs`, `indeed_jobs`, or `glassdoor_jobs` depending on `source_site`, and a
   Postgres FK targets exactly one table. There is therefore **no `ON DELETE CASCADE`** to keep
-  the tables in step. The 1:1 correspondence is a *code* invariant, held in three places:
-  ingest (dual-write in one transaction), claim, and auto-expiration. Anyone reaching for a
-  cascading FK here will find it cannot be created.
+  the tables in step. The 1:1 correspondence is a *code* invariant, held in **two** places:
+  ingest (dual-write in one transaction) and auto-expiration. It was three until spec 010
+  retired the claim; the third holder is now whichever external service claims rows, which
+  must flip both sides in one transaction. Anyone reaching for a cascading FK here will find
+  it cannot be created.
 - **[as-built] `scrape_time` is copied, never defaulted.** The per-source INSERT returns it and
   the canonical write binds that exact value. Auto-expiration deletes from both tables using the
   same `scrape_time` predicate, so if the canonical row ever defaulted to its own `now()` the two
   sets would drift at the shelf-life boundary and orphan canonical rows.
-- **[as-built] Lifecycle is symmetric.** `matched` is flipped on both rows by the same claim
-  operation — it is copied as `false` at ingest, so nothing else would ever set it true, and the
-  canonical flag would be permanently wrong. Auto-expiration deletes canonical rows alongside
-  per-source rows, so a canonical row never outlives its source.
+- **[as-built] Lifecycle is symmetric.** Auto-expiration deletes canonical rows alongside
+  per-source rows, so a canonical row never outlives its source. `matched` is copied as `false`
+  at ingest and **nothing in JHA sets it true** — the post-scrape auto-claim was retired
+  (spec 010) and its module deleted. The flag is reserved for the standalone filtering/matching
+  service. Symmetry therefore holds trivially today (both sides stay `false`); when that service
+  claims a row it must flip **both** in one transaction, or the canonical flag goes permanently
+  wrong — nothing else would ever correct it.
 - **Migration** — done: `030_unified_scraped_jobs.py` (drop-and-recreate; the legacy table held
   0 rows, so nothing was preserved). It is **one-way**: `downgrade()` raises rather than
   reconstruct a ~48-column legacy schema whose code no longer exists.

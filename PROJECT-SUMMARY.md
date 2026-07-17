@@ -38,7 +38,8 @@ extension/     Chrome MV3 scraper — LinkedIn / Indeed CA / Glassdoor CA
 backend/       FastAPI + async SQLAlchemy + Alembic + PostgreSQL (+ optional Redis)
   routers/     config, jobs (ingest + listing), extension, run-log websocket,
                admin/auto-scrape, admin cleanup   ← dedup/matching/profile/skills REMOVED
-  auto_scrape/ post-scrape orchestrator: Phase 1 auto-expiration, Phase 2 matched-claim
+  auto_scrape/ post-scrape orchestrator: Phase 1 auto-expiration, then finalize
+  (the Phase 2 matched-claim was retired — feature 010)
   core/        config, database, auth, trace, system_settings, redis, auto-scrape lifecycle
 
 frontend/      NEW Vite + React + TypeScript app (rebuilt from scratch this round)
@@ -64,9 +65,10 @@ The per-site → canonical field mapping (which source column each canonical fie
 site, with transforms) is documented in **`docs/live-per-source-schemas.md`**.
 
 Key invariants: schema changes go through Alembic (head **031**); per-source tables are
-append-only except a one-way `matched` flag and shelf-life expiration; the `matched` claim and
-auto-expiration keep the per-source row and its canonical twin **in sync** (claim flips both;
-expiring one deletes the other). Salaries are stored exactly as quoted (never annualized) and
+append-only except a one-way `matched` flag and shelf-life expiration; the per-source row and its
+canonical twin stay **in sync** (auto-expiration deletes both; a `matched` claim must flip both
+in one transaction — though **nothing in JHA claims any more**: the auto-claim was retired in
+feature 010, so `matched` stays `false` for the standalone filtering/matching service to claim). Salaries are stored exactly as quoted (never annualized) and
 periods normalized to `HOURLY/DAILY/WEEKLY/MONTHLY/ANNUAL`; dates normalized to `timestamptz`. The
 filter columns follow the same tri-state discipline (NULL = "site didn't say", never "no"):
 `employment_type` is a seven-token set (incl. `PERMANENT`), `workplace_type` is REMOTE/HYBRID/ONSITE
@@ -156,11 +158,12 @@ implement**, with the existing `smoke_test_*.py` suite as the behavioral contrac
 ### Next: the standalone filtering/matching service
 The removed dedup+matching half returns as a **separate** on-demand service that reads only
 `scraped_jobs` and writes its own `filtered_jobs`/`matched_jobs` — designed in
-`filter-matching-service-design.md`. Two JHA prerequisites remain before it's built: **JHA-B**
-(retire the vestigial post-scrape matched-claim so `matched` stays FALSE for the service to claim —
-still pending; the auto-claim in `auto_scrape/post_scrape_orchestrator.py` still flips it) and
-**JHA-C** (a frontend **Profile** page + `profile` table, since the user enters their profile on
-the frontend). Playbooks for JHA-A/B are in `jha-prereq-cmds.md`.
+`filter-matching-service-design.md`. **JHA-B** (retire the vestigial post-scrape matched-claim so
+`matched` stays FALSE for the service to claim) is ✅ **shipped** — feature 010 removed the
+auto-claim from `auto_scrape/post_scrape_orchestrator.py` and deleted `matching_claim.py`; new
+rows now survive a cycle unclaimed. One prerequisite remains: **JHA-C** (a frontend **Profile**
+page + `profile` table, since the user enters their profile on the frontend). Playbooks for
+JHA-A/B are in `jha-prereq-cmds.md`.
 
 ### Known follow-ups (deliberately deferred)
 - **Two manual checks** the tooling couldn't automate: quickstart **S1.6** (360px responsive

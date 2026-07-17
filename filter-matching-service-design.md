@@ -19,7 +19,7 @@
 | Prereq | State | Notes |
 |---|---|---|
 | **JHA-A** — extend the canonical projection | ✅ **SHIPPED** (feature 009, Alembic **031**) | `scraped_jobs` carries the five filter columns. Vocab resolved against a live scan (below). |
-| **JHA-B** — retire the vestigial matched-claim | ⛔ **STILL REQUIRED — blocker** | `auto_scrape/post_scrape_orchestrator.py:179` still calls `claim_unmatched_rows`, which flips `matched=TRUE` on all three per-source tables **and** `scraped_jobs`. Until removed, this service's `WHERE matched=FALSE` claim finds **no rows** after any auto-scrape cycle. |
+| **JHA-B** — retire the vestigial matched-claim | ✅ **SHIPPED** (feature 010) | The auto-claim is gone from `run_post_scrape_phase` and `auto_scrape/matching_claim.py` is deleted. Rows now survive a cycle `matched=FALSE`, so this service's `WHERE matched=FALSE` claim finds them. The post-scrape run is auto-expiration → finalize. **Caveat — the pre-010 backlog:** rows ingested before the retirement are still `matched=TRUE` and were deliberately *not* back-filled; they are invisible to this service's claim. Only rows scraped after 2026-07-16 are guaranteed unclaimed. If you want the backlog, arrange it deliberately — you cannot obtain it by claiming. |
 | **JHA-C** — profile input page | 🆕 **NEW** (from the frontend-source decision) | A Profile page on the JHA frontend writes a validated profile to a JHA-owned `profile` table; this service reads it (§7). |
 
 **Live-scan vocab resolutions baked into JHA-A** (the service must code to these, not to the old design's assumptions):
@@ -73,20 +73,35 @@ new and still needs a playbook.
   scan (see Build-status box): seven-token employment set incl. `PERMANENT`; LinkedIn
   `workplace_type` from its URN enum (1=ONSITE/2=REMOTE/3=HYBRID); Glassdoor `workplace_type`
   always NULL; Indeed `EXTRACTION` → `salary_disclosed=TRUE`. *(Decision #1)*
-- **JHA-B — Retire the vestigial post-scrape matched-claim.** ⛔ **STILL REQUIRED — the one hard
-  blocker.** `run_post_scrape_phase` (`auto_scrape/post_scrape_orchestrator.py:179`) still calls
-  `claim_unmatched_rows` (`auto_scrape/matching_claim.py`), which flips `matched=FALSE→TRUE` on all
-  three per-source tables and `scraped_jobs` at the end of every auto-scrape cycle. Remove that
-  Phase-2 call so `matched` stays `FALSE` until **this** service claims it; keep the `matched`
-  column; update `smoke_test_matched_claim.py`. *(Decision #2)*
+- **JHA-B — Retire the vestigial post-scrape matched-claim.** ✅ **SHIPPED** (feature 010).
+  `run_post_scrape_phase` no longer claims rows; `auto_scrape/matching_claim.py` is deleted. The
+  post-scrape run is auto-expiration → finalize, and a completed cycle records
+  `match_results = {"claim_summary": null, "claim_retired": true}`. The `matched` column stays on
+  all four tables as **this service's** processed-marker, and `smoke_test_matched_claim.py` now
+  asserts the inverse — that a post-scrape run leaves rows unclaimed. *(Decision #2)*
+
+  **What this service must honour when it claims** (JHA's guarantees, and its obligations):
+  - JHA never sets `matched=TRUE` and never reverses a claim. An unclaimed row is genuinely
+    unworked, and your claim will not be undone by JHA.
+  - Claim with `WHERE matched = FALSE` (idempotent), and flip **the canonical `scraped_jobs` row
+    and its per-source origin together, in one transaction** — the two must never disagree.
+  - **The pre-010 backlog is not yours by claiming.** Rows ingested before 2026-07-16 are
+    `matched=TRUE` (claimed by the old auto-claim) and were deliberately not back-filled. Only
+    rows scraped since are guaranteed unclaimed. Wanting the backlog is a separate, deliberate
+    decision — see `specs/010-retire-matched-autoclaim/spec.md` FR-004b.
+  - **`RE-ENTRY-WRITE` is still open** (§0.2). JHA feature 010 deliberately did **not** settle
+    whether you may reset `matched=FALSE` for blacklist re-entry: it neither permits nor forbids
+    it. Note CC-1 permits `false → true` and "no other in-place updates", so a re-entry write
+    needs its own governance decision before you build it.
 - **JHA-C — Profile input on the frontend.** 🆕 A **Profile** page on the JHA frontend (alongside
   Config) lets the user enter their profile (skills, YOE, titles, education, preferences, resume
   text — the §7 shape); the JHA backend validates and persists it to a JHA-owned `profile` table
   (one active row) in the shared Postgres. This service reads the active profile at run start (§7).
   Stored in the DB, not a file, so it stays portable local ↔ AWS with the same `DATABASE_URL`.
 
-After JHA-A/B/C, this service reads **only** `scraped_jobs` + the `profile` row, owns the `matched`
-claim, and needs no per-source joins.
+With JHA-A and JHA-B shipped, this service already has what it needs from the scrape side: it
+reads **only** `scraped_jobs` (all five filter columns present) + the `profile` row once JHA-C
+lands, owns the `matched` claim, and needs no per-source joins.
 
 ---
 
@@ -144,6 +159,13 @@ interview-worthy. LLM band `[0.50, 1.00)`. Binary verdict. Old §2 + decision lo
 The service **claims** a batch: selects `scraped_jobs WHERE matched = FALSE` (optionally
 `ORDER BY scrape_time` `LIMIT batch_limit`), flips them `matched = TRUE` in the same transaction
 (the claim), and processes them. Blacklist re-entry resets `matched = FALSE`.
+
+> **The first run inherits a real, possibly large backlog — it does NOT start empty.** JHA-B was
+> measured with ~49% of live `scraped_jobs` already `matched = FALSE` (every row ingested since the
+> last pre-JHA-B auto-claim cycle). There is no ship-time boundary that empties the claimable set:
+> on first run the service sees *everything* unclaimed at that moment, not just newly-scraped rows.
+> So `batch_limit` and multi-run draining matter from day one, and the initial pass carries a
+> proportional LLM cost (§9) — size the first drain deliberately rather than assuming a trickle.
 
 After JHA-A, `scraped_jobs` carries everything the gates need — the service reads **one table, no
 per-source joins**:

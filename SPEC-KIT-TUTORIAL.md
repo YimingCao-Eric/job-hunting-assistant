@@ -54,7 +54,8 @@ Start with one module, produce all three deliverables for it, then repeat. Sugge
 easiest/most-central first:
 
 1. **Post-scrape orchestrator** — `backend/auto_scrape/post_scrape_orchestrator.py`,
-   `auto_expiration.py`, `matching_claim.py` (LIVE, documented, self-contained). *Worked
+   `auto_expiration.py` (LIVE, documented, self-contained; `matching_claim.py` was a second
+   such module until feature 010 retired the claim and deleted it). *Worked
    example below.*
 2. **Ingest router** — `backend/routers/jobs.py` (the `*_COLS` contract, per-source routing).
 3. **Dedup service** — `backend/dedup/service.py`.

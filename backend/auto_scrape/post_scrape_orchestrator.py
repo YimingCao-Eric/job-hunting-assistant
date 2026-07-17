@@ -4,9 +4,16 @@ Backend post-scrape orchestrator.
 Claims cycles in scrape_complete and transitions them to post_scrape_complete.
 Infrastructure: atomic claim, heartbeat, Redis subscriber, APScheduler poll.
 
-Runs Phase 1 (auto-expiration) then Phase 2 (matched-claim), then finalizes.
-The dedup/matching phases (formerly Phase 4-6) have been removed (search-only
-backend); cycle output is cleanup_results + match_results={"claim_summary": ...}.
+Runs Phase 1 (auto-expiration), then finalizes. There is no claim phase: the
+post-scrape matched-claim was retired (feature 010) once dedup/matching were
+removed by the search-only split and nothing consumed the claim. `matched` now
+stays FALSE after a scrape so a downstream filtering/matching service can claim
+rows itself.
+
+Cycle output is cleanup_results + match_results={"claim_summary": None,
+"claim_retired": True}. `claim_summary` is retained as an explicit None -- "no
+counts were produced" -- and must not be read as zero counts. Cycles completed
+before the retirement keep their real per-site counts and are never rewritten.
 
 Wake paths: Redis pub/sub (instant) + APScheduler 1-min poll (fallback).
 """
@@ -25,7 +32,6 @@ from core.config import settings
 from core.database import AsyncSessionLocal
 from core.redis_client import REDIS_CHANNEL_AUTO_SCRAPE
 from auto_scrape.auto_expiration import run_auto_expiration
-from auto_scrape.matching_claim import claim_unmatched_rows
 from models.auto_scrape_cycle import AutoScrapeCycle
 
 logger = logging.getLogger(__name__)
@@ -174,25 +180,21 @@ async def run_post_scrape_phase(cycle_id: UUID) -> None:
                 expiration_results = await run_auto_expiration(db)
         await _update_cycle(cycle_id, cleanup_results=expiration_results)
 
-        async with AsyncSessionLocal() as db:
-            async with db.begin():
-                claim_results = await claim_unmatched_rows(db)
-        claim_summary = {site: len(rows) for site, rows in claim_results.items()}
-
-        await _update_cycle(
-            cycle_id,
-            match_results={"claim_summary": claim_summary},
-        )
-        logger.info(
-            "Post-scrape cycle %s: claim_summary=%s", cycle_id, claim_summary
-        )
-
+        # No claim phase. The marker lives ONLY in this finalize write: a cycle that
+        # fails before finalizing must record no claim indication at all, while its
+        # cleanup_results survive independently (FR-007a). Moving it earlier would
+        # break that silently.
         await _update_cycle(
             cycle_id,
             status="post_scrape_complete",
             completed_at=datetime.now(timezone.utc),
+            match_results={"claim_summary": None, "claim_retired": True},
         )
-        logger.info("Post-scrape cycle %s: post_scrape_complete", cycle_id)
+        logger.info(
+            "Post-scrape cycle %s: post_scrape_complete (claim retired; "
+            "matched left FALSE for the downstream claimer)",
+            cycle_id,
+        )
 
     except Exception as e:
         logger.exception("Post-scrape cycle %s: failed", cycle_id)
