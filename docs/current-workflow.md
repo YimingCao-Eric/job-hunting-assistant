@@ -8,7 +8,7 @@
 > - Deciding what to build next
 > - Debugging a cycle that didn't behave as expected
 >
-> For DDL details see `current-schemas.md`. For session history see `session-record-2026-05-07.md`. For comprehensive project history see `jha-onboarding.md`.
+> For live DDL see `docs/live-per-source-schemas.md` (the maintained schema doc; the older `current-schemas.md` was deleted). For comprehensive project history see `docs/jha-onboarding.md`.
 
 ---
 
@@ -54,7 +54,7 @@
 - The post-scrape run is **one phase — auto-expiration — then finalize**. Nothing else.
 - **The matched-claim (formerly Phase 2) is retired** (feature 010). Rows are left `matched=FALSE` after a scrape so the standalone filtering/matching service can claim them itself. `auto_scrape/matching_claim.py` is deleted.
 - **Dedup and matching are not in this backend.** The `dedup/`, `matching/`, and `profile/` packages were deleted by the search-only split, along with the `_run_dedup_for_cycle` / `_run_matching_for_cycle` / `_compute_match_results` stubs that older revisions of this document described as "Phases 4-6". They do not exist. The `match_candidates` design ("Phase 3") was superseded by the canonical `scraped_jobs` table (feature 008).
-- That work now belongs to a **standalone service** (`filter-matching-service-design.md`), which consumes `scraped_jobs` and owns the `matched` claim.
+- That work now belongs to a **standalone service** (`docs/filter-matching-service-design.md`), which consumes `scraped_jobs` and owns the `matched` claim.
 - Auto-apply remains a distant product idea, not in this codebase.
 
 ---
@@ -65,7 +65,7 @@ Terms used in this document, defined once here:
 
 | Term | Definition |
 |---|---|
-| **Per-source tables** | The three site-specific scrape tables: `linkedin_jobs`, `indeed_jobs`, `glassdoor_jobs`. Each one matches its site's natural field shape (51, 61, 69 columns respectively). Created in migration 025; replaces the legacy unified `scraped_jobs` table. |
+| **Per-source tables** | The three site-specific scrape tables: `linkedin_jobs`, `indeed_jobs`, `glassdoor_jobs`. Each matches its site's natural field shape (`linkedin_jobs` **39**, `indeed_jobs` **45**, `glassdoor_jobs` **48** columns live; introduced in migration 025, trimmed by later drops). Live column lists: `docs/live-per-source-schemas.md`. |
 | **`match_candidates`** | **Abandoned design — does not exist and is not planned.** It was to be a merged table built from claimed per-source rows. Superseded by `scraped_jobs` (feature 008), which is now the canonical merged table written at ingest by atomic dual-write. Consumers read `scraped_jobs` directly; there is no build phase. |
 | **`scraped_jobs`** | The canonical, site-agnostic merged table — one row per posting, written in the same transaction as its per-source row (feature 008). This is the table downstream consumers read. |
 | **`scan_run_id`** | UUID FK to `extension_run_logs.id`. Every per-source row carries this; identifies which scrape produced it. |
@@ -309,7 +309,7 @@ The marker is written **only** in the finalize call, so a cycle that fails befor
 
 Earlier revisions of this document described Phases 3-6 (`build_match_candidates`, `_run_dedup_for_cycle`, `_run_matching_for_cycle`, `_compute_match_results`) as the next workstream or as stubs. **None of those functions exist** — the `dedup/`, `matching/`, and `profile/` packages were deleted by the search-only split, and the `match_candidates` design was superseded by the canonical `scraped_jobs` table (feature 008).
 
-That work now belongs to a **separate standalone service** that reads `scraped_jobs`, claims rows via `matched`, and writes its own tables. See `filter-matching-service-design.md`. The backend orchestrator is search-only and ends at finalize.
+That work now belongs to a **separate standalone service** that reads `scraped_jobs`, claims rows via `matched`, and writes its own tables. See `docs/filter-matching-service-design.md`. The backend orchestrator is search-only and ends at finalize.
 
 ---
 
@@ -366,7 +366,7 @@ After a cycle reaches `post_scrape_complete`, the database state is:
 
 | Item | Where it lives now | Status |
 |---|---|---|
-| **Filtering / dedup** | Standalone service (`filter-matching-service-design.md`) | 🆕 To build. Reads canonical `scraped_jobs`; claims rows via `matched`. The old backend `dedup/` package was **deleted** by the search-only split — recoverable from git history if the service wants to port it. |
+| **Filtering / dedup** | Standalone service (`docs/filter-matching-service-design.md`) | 🆕 To build. Reads canonical `scraped_jobs`; claims rows via `matched`. The old backend `dedup/` package was **deleted** by the search-only split — recoverable from git history if the service wants to port it. |
 | **Matching (CPU + LLM)** | Same standalone service | 🆕 To build. The old `matching/` package was **deleted**; same recovery route. |
 | **`match_candidates`** | — | ❌ **Abandoned.** Superseded by canonical `scraped_jobs` (feature 008). There is no build phase; consumers read `scraped_jobs` directly. |
 | **Profile input** | JHA frontend + a JHA-owned `profile` table | 🆕 To build (prerequisite **JHA-C**). The service reads the active profile. |
@@ -375,7 +375,7 @@ After a cycle reaches `post_scrape_complete`, the database state is:
 
 ### Prerequisites for the standalone service
 
-Tracked in `jha-prereq-cmds.md`:
+Tracked in `docs/jha-prereq-cmds.md`:
 
 - **JHA-A** — extend the canonical `scraped_jobs` projection with the filter columns. ✅ **Shipped** (feature 009, migration 031).
 - **JHA-B** — retire the vestigial post-scrape matched-claim so `matched` stays `FALSE`. ✅ **Shipped** (feature 010). This was the one hard blocker: until it landed, the service's `WHERE matched = FALSE` claim would have found zero rows after any cycle.
@@ -400,4 +400,4 @@ For the full incident write-up, see `cycle-455-incident-report.md`.
 
 ---
 
-*End of workflow document. For DDL details: `current-schemas.md`. For session history: `session-record-2026-05-07.md`. For project history: `jha-onboarding.md`.*
+*End of workflow document. For live DDL: `docs/live-per-source-schemas.md`. For project history: `docs/jha-onboarding.md`.*

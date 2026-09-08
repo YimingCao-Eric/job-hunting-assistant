@@ -19,3 +19,6 @@ test.txt
 captured-env.txt
 
 *.log
+
+.idea/
+.claude/settings.local.json

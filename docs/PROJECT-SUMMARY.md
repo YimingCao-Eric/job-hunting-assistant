@@ -143,6 +143,22 @@ implement**, with the existing `smoke_test_*.py` suite as the behavioral contrac
   regression but was proven correct by replaying stored payloads (REMOTE 180 / HYBRID 123 /
   ONSITE 76). Truncate + rescan to refresh immediately.
 
+### Phase G — Retire the vestigial post-scrape matched-claim (`specs/010-retire-matched-autoclaim`, "JHA-B")
+- Removed the auto-claim from the post-scrape orchestrator (`run_post_scrape_phase`) and deleted
+  `auto_scrape/matching_claim.py`, so `matched` now stays **FALSE** after a scrape — the downstream
+  filter/matcher service will claim rows itself. Post-scrape is now auto-expiration → finalize; a
+  completed cycle records `match_results = {"claim_summary": null, "claim_retired": true}`.
+- A **PATCH** amendment, not the MAJOR first assumed — the lesson being *read the clause, not the
+  summary*. The actual text showed Principle V's permitted-mutation rule names no actor and
+  Principle II pins the surviving filename, so retiring the claim falsified exactly **one**
+  constitution line (the `auto_scrape/` module-layout parenthetical). Constitution → **1.1.1**, with
+  the rejected 4-sites/MAJOR reasoning written into its own sync report so it isn't re-derived.
+- Verified on real data, not inference: a truncate + 3-site scan produced **113 rows, all
+  `matched=FALSE`** (the old code would have flipped them). Fidelity catch — FR-004b's "everything
+  is already claimed at ship" was disproven by the DB (~49% unclaimed); a *state* claim the code
+  survey couldn't see, only a query could. The frontend renders the retired marker counts-first, so
+  historical "N claimed" cycles are unchanged (FR-008).
+
 ---
 
 ## 4. Where things stand
@@ -153,17 +169,20 @@ implement**, with the existing `smoke_test_*.py` suite as the behavioral contrac
   **staged/committed locally** and being merged to `main`.
 - **Canonical filter columns (feature 009 / "JHA-A")**: shipped (migration 031, 48/48 tasks). A
   live 3-site scan verified population per site; the projection is correct on every observed token.
+- **Retire matched-claim (feature 010 / "JHA-B")**: shipped (no migration; constitution → 1.1.1).
+  `matched` stays FALSE after a scrape — verified 113/113 unclaimed on a live scan. Lands as a
+  single commit per FR-014 (code + constitution + spec + smoke + docs together).
 - **Backend files touched by the frontend work**: zero.
 
 ### Next: the standalone filtering/matching service
 The removed dedup+matching half returns as a **separate** on-demand service that reads only
 `scraped_jobs` and writes its own `filtered_jobs`/`matched_jobs` — designed in
-`filter-matching-service-design.md`. **JHA-B** (retire the vestigial post-scrape matched-claim so
+`docs/filter-matching-service-design.md`. **JHA-B** (retire the vestigial post-scrape matched-claim so
 `matched` stays FALSE for the service to claim) is ✅ **shipped** — feature 010 removed the
 auto-claim from `auto_scrape/post_scrape_orchestrator.py` and deleted `matching_claim.py`; new
 rows now survive a cycle unclaimed. One prerequisite remains: **JHA-C** (a frontend **Profile**
 page + `profile` table, since the user enters their profile on the frontend). Playbooks for
-JHA-A/B are in `jha-prereq-cmds.md`.
+JHA-A/B are in `docs/jha-prereq-cmds.md`.
 
 ### Known follow-ups (deliberately deferred)
 - **Two manual checks** the tooling couldn't automate: quickstart **S1.6** (360px responsive
@@ -176,9 +195,15 @@ JHA-A/B are in `jha-prereq-cmds.md`.
   so the projection correctly writes NULL for every Glassdoor row — a **scraper-layer** follow-up,
   its own feature. Downstream must gate remote on `remote`, not `workplace_type` (which would
   silently drop the whole Glassdoor corpus).
-- **Constitution §II lists three smoke tests where four now exist.** Needs its own
-  `/speckit-constitution` **PATCH (1.1.1)** with a version bump; also generalize the wording so it
-  stops enumerating filenames and drifting.
+- **Constitution §II lists three smoke tests where four now exist.** Separate from JHA-B's
+  module-layout fix (which took the constitution to **1.1.1**); the smoke-test-list correction is
+  its own `/speckit-constitution` **PATCH (→ 1.1.2)** — and while there, generalize the wording so
+  it stops enumerating filenames and drifting.
+- **Test-infrastructure gaps (surfaced during JHA-B).** The smoke suite runs against the
+  *production* database — an old matched-claim test blanket-mutated 559 real rows before it was
+  rewritten scoped. And there's no component-test infrastructure (`@testing-library/react` absent),
+  so the cycle-history render precedence has no automated coverage. Both deserve one deliberate
+  test-infra pass, kept clear of feature work.
 - **Stale pre-fix canonical rows.** `ON CONFLICT DO NOTHING` never recomputes existing rows, so
   values added by a projection change only appear on newly-inserted rows; old rows self-heal within
   one shelf-life, or immediately via a truncate + rescan.
@@ -188,13 +213,17 @@ JHA-A/B are in `jha-prereq-cmds.md`.
 
 ### Key reference docs
 - `.specify/memory/constitution.md` — the coding standards.
+- `docs/getting-started-claude-speckit.md` — from-zero setup of Claude Code + GitHub Spec Kit (how
+  to bootstrap a repo the way JHA and the filter-matcher are built).
 - `docs/live-per-source-schemas.md` — live per-source schemas + the unified merged-table mapping
   (authoritative for the per-site → canonical field lineage, incl. the 031 filter columns).
-- `specs/001`–`009` — the as-built and feature specs (spec, plan, tasks, research, contracts).
-- `filter-matching-service-design.md` — design for the next, standalone filtering/matching service
-  (reads `scraped_jobs`; JHA-A/B/C prerequisites). `jha-prereq-cmds.md` — JHA-A/B command playbooks.
-- `docs/current-workflow.md`, `docs/current-schemas.md`, `docs/jha-onboarding.md` — older design
-  docs (predate the split; verify against the live schema/README before trusting).
+- `specs/001`–`010` — the as-built and feature specs (spec, plan, tasks, research, contracts).
+- `docs/filter-matching-service-design.md` — design for the next, standalone filtering/matching service
+  (reads `scraped_jobs`; JHA-A/B/C prerequisites). `docs/jha-prereq-cmds.md` — JHA-A/B command playbooks.
+- `docs/current-workflow.md` — current end-to-end workflow reference (search-only, feature 010).
+  `docs/jha-onboarding.md` — historical pre-split scan-algorithm retrospective (banner-flagged;
+  read for the scrape walkthrough, not current architecture). `docs/current-schemas.md` was
+  **deleted** — use `docs/live-per-source-schemas.md` for schema.
 
 ---
 

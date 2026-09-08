@@ -1,5 +1,7 @@
 # JHA Extension — Onboarding Walkthrough of the Scan Algorithm
 
+> ⚠️ **Historical document (code-reading session 2026-04-25) — read it for the SCRAPE algorithm, not for current architecture.** JHA has since been split to **search-only**: the `dedup/`, `matching/`, and `profile/` packages were deleted, the post-scrape matched-claim was retired (feature 010), and `scraped_jobs` became the unified canonical table (feature 008) extended with filter columns (feature 009). Any dedup / matching / profile / `match_candidates` content below is **superseded** — see `docs/PROJECT-SUMMARY.md`, `docs/current-workflow.md`, and `docs/live-per-source-schemas.md` for current reality. The extension scrape walkthrough (the bulk of this document) is still broadly accurate.
+
 > **Audience:** A new teammate joining the JHA project. You can read code,
 > but you may not know Chrome extensions, FastAPI, or the JHA codebase.
 > This document is your guided tour from the moment a user clicks

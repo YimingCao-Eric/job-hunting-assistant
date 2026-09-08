@@ -1,6 +1,6 @@
 # Filtering & Matching Service — Design (current-codebase edition)
 
-> A ground-up redesign of the old `step3-filter-matching-design.md` for the **current**
+> A ground-up redesign of the old `step3-filter-matching-design.md` (retained only in **git history**, not in the tree) for the **current**
 > search-only JHA codebase. The old doc targeted a pre-split codebase and no longer matches
 > reality; this keeps its proven verdict model and cost principles but re-targets storage,
 > packaging, and inputs to today's `scraped_jobs`, and folds in four review decisions (§0.1).
@@ -61,10 +61,10 @@ The old design assumed a codebase that no longer exists. Each is re-resolved bel
 
 ---
 
-## 1. Prerequisite JHA changes (see `jha-prereq-cmds.md`)
+## 1. Prerequisite JHA changes (see `docs/jha-prereq-cmds.md`)
 
 Three small features must land in the **current JHA repo** before this service is built. Commands
-for JHA-A/JHA-B (Claude Code + Spec Kit) are in the companion file `jha-prereq-cmds.md`; JHA-C is
+for JHA-A/JHA-B (Claude Code + Spec Kit) are in the companion file `docs/jha-prereq-cmds.md`; JHA-C is
 new and still needs a playbook.
 
 - **JHA-A — Extend the canonical `scraped_jobs` projection.** ✅ **SHIPPED (feature 009, migration
@@ -160,12 +160,13 @@ The service **claims** a batch: selects `scraped_jobs WHERE matched = FALSE` (op
 `ORDER BY scrape_time` `LIMIT batch_limit`), flips them `matched = TRUE` in the same transaction
 (the claim), and processes them. Blacklist re-entry resets `matched = FALSE`.
 
-> **The first run inherits a real, possibly large backlog — it does NOT start empty.** JHA-B was
-> measured with ~49% of live `scraped_jobs` already `matched = FALSE` (every row ingested since the
-> last pre-JHA-B auto-claim cycle). There is no ship-time boundary that empties the claimable set:
-> on first run the service sees *everything* unclaimed at that moment, not just newly-scraped rows.
-> So `batch_limit` and multi-run draining matter from day one, and the initial pass carries a
-> proportional LLM cost (§9) — size the first drain deliberately rather than assuming a trickle.
+> **The first run's claimable set (`matched = FALSE`) is large — it does NOT start empty.** At JHA-B
+> ship ~49% of live `scraped_jobs` were already `matched = FALSE` (everything ingested since the last
+> pre-010 auto-claim cycle), and that set only grows until the service first runs. So the first pass
+> sees *everything* currently unclaimed, not just newly-scraped rows — `batch_limit`, multi-run
+> draining, and a proportional first-pass LLM cost (§9) all matter from day one; don't size it for a
+> trickle. **Note the two are different sets:** this is the claimable `FALSE` set; the older
+> `matched = TRUE` rows are invisible and *not* claimable — a separate thing entirely (§1, FR-004b).
 
 After JHA-A, `scraped_jobs` carries everything the gates need — the service reads **one table, no
 per-source joins**:
@@ -411,15 +412,16 @@ blacklisted + deduped + Σfiltered + matched`).
 | ~~PROFILE-SRC~~ | ~~Where does the profile come from?~~ | ✅ **RESOLVED** — entered on the JHA frontend, persisted to a `profile` table (JHA-C, §7) |
 | DEDUP-LOC | Location granularity for the dedup bucket (exact / city / province)? | City-level; remote its own bucket |
 | RESULTS-UI | JHA frontend shows `matched_jobs`, or its own UI later? | Later; `matched_jobs` is queryable now. Note the frontend is already gaining a Profile page (JHA-C), so a results view is a natural sibling. |
-| RE-ENTRY-WRITE | This service writes `matched=FALSE` back to JHA per-source tables for blacklist re-entry — acceptable, or keep re-entry service-local? | Confirm; it's the one place the service writes JHA-owned data. Cleaner once **JHA-B** lands and the per-source `matched` is no longer touched by JHA itself. |
+| RE-ENTRY-WRITE | This service writes `matched=FALSE` back to JHA per-source tables for blacklist re-entry — acceptable, or keep re-entry service-local? | Decide before building. Now that **JHA-B** has shipped, JHA no longer touches the per-source `matched`, so this service would be its only writer — but CC-1 permits only `false → true`, so a re-entry *reset* needs its own governance decision (feature 010 deliberately left it open — see §1). |
 | SCHEDULING | Add scheduled/continuous later? | Deferred |
 | GATE-RULES | Exact allowed/blocked lists for industry / experience-level / title | Small config/profile-driven lists at implementation |
 
 ---
 
-*Supersedes `step3-filter-matching-design.md` for the current codebase. That file remains the
+*Supersedes `step3-filter-matching-design.md` (no longer in the tree — recoverable from **git history**) for the current codebase. That file held the
 authority for algorithm-level detail (banding math, cost principles, crash recovery); this file
 re-targets integration, storage, packaging, dedup identity, and the profile format to today's
 `scraped_jobs`-based JHA and a standalone local/AWS service. Prerequisite JHA changes: JHA-A
-(extend projection — ✅ shipped), JHA-B (retire auto-claim — ⛔ still required), JHA-C (profile
-input page — 🆕 new) — see `jha-prereq-cmds.md` (JHA-A/B) and §1/§7 (JHA-C).*
+(extend projection — ✅ shipped, feature 009), JHA-B (retire auto-claim — ✅ shipped, feature 010),
+JHA-C (profile input page — 🆕 the one remaining prereq) — see `docs/jha-prereq-cmds.md` (JHA-A/B) and
+§1/§7 (JHA-C).*
