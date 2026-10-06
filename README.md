@@ -10,7 +10,7 @@ Postgres via the REST API.
 
 > **Scope note.** JHA *used to* also de-duplicate and AI-match jobs against a resume. That half was
 > removed in the search-only split — the project is now **scrape → store → browse**. The removed
-> dedup/matching logic is being rebuilt as a **separate** standalone service that consumes the
+> dedup/matching logic is being rebuilt as a **separate** [standalone service](https://github.com/YimingCao-Eric/filter-matcher) that consumes the
 > canonical `scraped_jobs` table (see `docs/filter-matching-service-design.md`).
 
 ## Architecture
